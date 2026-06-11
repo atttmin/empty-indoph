@@ -101,6 +101,112 @@ struct HTMLPlainTextTests {
     }
 }
 
+struct NativeChapterParserTests {
+    @Test func extractsReadableBlocksImagesAndParagraphIndexes() {
+        let chapter = EPUBChapter(
+            title: "Native",
+            href: "Text/ch1.xhtml",
+            content: """
+            <html xmlns="http://www.w3.org/1999/xhtml">
+              <head><title>Ignored</title></head>
+              <body>
+                <h1>第一章</h1>
+                <p>第一段 <em>强调</em>&nbsp;文字。</p>
+                <blockquote>引文</blockquote>
+                <ul><li>列表项</li></ul>
+                <img src="../Images/pic.jpg" alt="插图"/>
+              </body>
+            </html>
+            """
+        )
+
+        let document = NativeChapterParser.parse(chapter)
+
+        #expect(document.blocks.count == 5)
+        #expect(document.textBlocks.map(\.text) == ["第一章", "第一段 强调 文字。", "引文", "列表项"])
+        #expect(document.blocks.compactMap(\.readerParagraph?.idx) == [0, 1, 2])
+        if case .image(_, let source, let alt) = document.blocks.last {
+            #expect(source == "../Images/pic.jpg")
+            #expect(alt == "插图")
+        } else {
+            Issue.record("Expected image block")
+        }
+    }
+
+    @Test func malformedXHTMLFallsBackToPlainParagraphs() {
+        let chapter = EPUBChapter(
+            title: "Broken",
+            href: "broken.xhtml",
+            content: "<html><body><p>第一段<p>第二段</body></html>"
+        )
+
+        let document = NativeChapterParser.parse(chapter)
+
+        #expect(document.blocks.compactMap(\.readerParagraph?.text).contains("第一段"))
+        #expect(!document.blocks.isEmpty)
+    }
+}
+
+struct NativeChapterOffsetsTests {
+    @Test func resolvesTextSpansAndSelectionContextPrecisely() {
+        let chapter = EPUBChapter(
+            title: "Native",
+            href: "Text/ch2.xhtml",
+            content: """
+            <html xmlns="http://www.w3.org/1999/xhtml">
+              <body>
+                <h1>Chapter</h1>
+                <p>第一段 甲乙丙。</p>
+                <p>第二段 甲乙丙。</p>
+                <p>尾段 收束。</p>
+              </body>
+            </html>
+            """
+        )
+
+        let document = NativeChapterParser.parse(chapter)
+        let chapterText = document.plainText
+        let spans = document.resolvedTextSpans(in: chapterText)
+        let secondParagraph = document.blocks[2]
+
+        guard let span = spans[secondParagraph.id] else {
+            Issue.record("Missing resolved span")
+            return
+        }
+
+        #expect(span.chapterRange.lowerBound < span.chapterRange.upperBound)
+        #expect(span.paragraphInfo?.idx == 1)
+
+        let selected = "甲乙丙"
+        guard let localRange = PlainTextSearch.utf16Range(of: selected, in: secondParagraph.text),
+              let selection = document.selection(
+                for: secondParagraph.id,
+                localUTF16Range: localRange,
+                chapterPlainText: chapterText,
+                spans: spans
+              ) else {
+            Issue.record("Missing precise selection context")
+            return
+        }
+
+        #expect(selection.text == selected)
+        #expect(selection.prefix.contains("第二段"))
+        #expect(selection.suffix.contains("尾段"))
+    }
+
+    @Test func convertsAbsoluteHighlightRangesIntoLocalRanges() {
+        let span = NativeTextBlockSpan(
+            blockID: "p-1",
+            chapterRange: 20..<42,
+            paragraphInfo: ReaderParagraph(idx: 0, text: "dummy")
+        )
+
+        #expect(span.localRange(intersecting: 24..<31) == 4..<11)
+        #expect(span.localRange(intersecting: 0..<10) == nil)
+        #expect(span.localRange(intersecting: 35..<50) == 15..<22)
+    }
+}
+
 // MARK: - Minimal EPUB fixture
 
 /// Builds a tiny but structurally valid EPUB: a stored-entry (uncompressed)

@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continue-reading hero gets a ⋯ menu and context-menu delete, and shelf
   covers reveal a trash button on hover (the right-click menu stays)
 
+- Native EPUB reader selections were still coarse whole-paragraph picks and
+  highlight rendering was approximate: text blocks now resolve exact UTF-16
+  spans against chapter plain text, iOS/macOS use native selectable text
+  views for fine-grained ranges, and stored highlights paint the exact local
+  ranges instead of whole matching paragraphs
+
 ### Added
 
 - Two cloud standards behind the same `AIService` protocol: the existing
@@ -80,6 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     roman numerals, bilingual chapter titles, per-chapter reading
     progress / 朱批 count / estimated minutes / 预译 state, current
     chapter highlighted
+
+
+- Native SwiftUI EPUB rendering path for iOS and Mac readers: chapters now
+  parse into heading / paragraph / quote / list / image blocks and render in
+  `ScrollView + LazyVStack`, with visible-paragraph reporting for 双语/导读
+  and stable inline-note insertion without WebView DOM reflow
 
 ### Added (earlier rounds)
 

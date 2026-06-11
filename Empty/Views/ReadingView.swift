@@ -19,17 +19,19 @@ nonisolated enum PageTurnDirection {
     case backward
 }
 
-/// A live text selection reported by the chapter web view.
+/// A live native-reader selection, anchored by nearby plain-text context.
 nonisolated struct ReaderSelection: Equatable {
     var text: String
     var prefix: String
     var suffix: String
 }
 
-/// What the in-page painter needs to mark one stored highlight.
+/// What reader painters need to mark one stored highlight.
 nonisolated struct HighlightPaint: Codable, Equatable {
     var id: String
     var text: String
+    var startUTF16: Int? = nil
+    var endUTF16: Int? = nil
 }
 
 /// Reader text mode — the prototype's 原文 / 双语对照 / 导读 toggle,
@@ -203,18 +205,19 @@ struct ReadingView: View {
             }
 
             ZStack(alignment: .bottom) {
-                ChapterWebView(
+                NativeChapterReaderView(
                     chapter: book.chapters[currentChapterIndex],
                     basePath: book.basePath,
                     fontSize: fontSize,
-                    isDarkMode: palette.isDark,
                     lineSpacing: lineSpacing,
                     landing: chapterLanding,
                     resumeUTF16Offset: resumeUTF16Offset,
                     chapterPlainText: currentChapterPlainText(),
                     highlights: chapterHighlights,
                     inlineMode: isBilingual ? .bilingual : .none,
+                    inlineLayout: .stacked,
                     inlineNotes: inlineNotes,
+                    selectionActive: pendingSelection != nil,
                     onTap: { withAnimation(.easeInOut(duration: 0.25)) { showControls.toggle() } },
                     onChapterBoundary: { direction in
                         crossChapterBoundary(direction, chapterCount: book.chapters.count)
@@ -226,6 +229,7 @@ struct ReadingView: View {
                         chapterPageInfo = (page: page, count: count)
                     }
                 )
+                .id(currentChapterIndex)
 
                 readerOverlay
             }
@@ -1018,7 +1022,14 @@ struct ReadingView: View {
         do {
             chapterHighlights = try HighlightStore(modelContext: modelContext)
                 .highlights(for: book, chapterIndex: currentChapterIndex)
-                .map { HighlightPaint(id: $0.id.uuidString, text: $0.textSnapshot) }
+                .map {
+                    HighlightPaint(
+                        id: $0.id.uuidString,
+                        text: $0.textSnapshot,
+                        startUTF16: $0.startUTF16,
+                        endUTF16: $0.endUTF16
+                    )
+                }
         } catch {
             chapterHighlights = []
         }

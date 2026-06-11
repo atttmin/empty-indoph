@@ -234,11 +234,10 @@ struct MacReaderScreen: View {
 
                     VStack(spacing: 0) {
                         ZStack(alignment: .bottom) {
-                            ChapterWebView(
+                            NativeChapterReaderView(
                                 chapter: epub.chapters[currentChapterIndex],
                                 basePath: epub.basePath,
                                 fontSize: fontSize,
-                                isDarkMode: palette.isDark,
                                 lineSpacing: lineSpacing,
                                 landing: chapterLanding,
                                 resumeUTF16Offset: resumeUTF16Offset,
@@ -247,6 +246,7 @@ struct MacReaderScreen: View {
                                 inlineMode: inlineNoteKind,
                                 inlineLayout: readingMode == .bilingual ? .parallel : .stacked,
                                 inlineNotes: inlineNotes,
+                                selectionActive: pendingSelection != nil,
                                 onTap: { pendingSelection = nil },
                                 onChapterBoundary: { direction in
                                     crossChapterBoundary(direction, chapterCount: epub.chapters.count)
@@ -265,6 +265,7 @@ struct MacReaderScreen: View {
                                     chapterPageInfo = (page: page, count: count)
                                 }
                             )
+                            .id(currentChapterIndex)
 
                             selectionOverlay
                         }
@@ -1533,7 +1534,14 @@ struct MacReaderScreen: View {
         do {
             chapterHighlights = try HighlightStore(modelContext: modelContext)
                 .highlights(for: book, chapterIndex: currentChapterIndex)
-                .map { HighlightPaint(id: $0.id.uuidString, text: $0.textSnapshot) }
+                .map {
+                    HighlightPaint(
+                        id: $0.id.uuidString,
+                        text: $0.textSnapshot,
+                        startUTF16: $0.startUTF16,
+                        endUTF16: $0.endUTF16
+                    )
+                }
         } catch {
             chapterHighlights = []
         }
