@@ -119,24 +119,11 @@ nonisolated enum VocabCloze {
     static func blank(_ sentence: String, word: String) -> String {
         let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return sentence }
-        var result = sentence
-        var searchRange = result.startIndex..<result.endIndex
-        var replaced = false
-        while let found = result.range(
+        return sentence.replacingOccurrences(
             of: trimmed,
-            options: [.caseInsensitive, .diacriticInsensitive],
-            range: searchRange
-        ) {
-            result.replaceSubrange(found, with: "______")
-            replaced = true
-            guard let next = result.index(
-                found.lowerBound,
-                offsetBy: 6,
-                limitedBy: result.endIndex
-            ) else { break }
-            searchRange = next..<result.endIndex
-        }
-        return replaced ? result : sentence
+            with: "______",
+            options: [.caseInsensitive, .diacriticInsensitive]
+        )
     }
 }
 

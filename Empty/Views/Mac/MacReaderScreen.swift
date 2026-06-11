@@ -52,10 +52,19 @@ struct MacReaderScreen: View {
     @State private var modeGuideText = ""
     @State private var isGuideLoading = false
     @State private var marginNote: String?
+    @State private var marginNoteSubject: String?
+    @State private var marginNoteSaved = false
     @State private var glossEntry: VocabEntry?
     @State private var isSelectionWorking = false
     @State private var thoughtLink: ThoughtLink?
     @State private var thoughtLinkExpanded = false
+    @State private var thoughtLinkSaved = false
+    @State private var chapterOutline: ChapterOutline?
+    @State private var chapterPageInfo: (page: Int, count: Int)?
+    @State private var inlineNotes: [InlineNotePaint] = []
+    @State private var inlineCache: [String: String] = [:]
+    @State private var inlineInFlight: Set<String> = []
+    @State private var inlineAIUnavailable = false
     @StateObject private var aloud = ReadingAloud()
 
     init(
@@ -87,6 +96,30 @@ struct MacReaderScreen: View {
     private var dueVocabCount: Int {
         let now = Date()
         return vocabEntries.filter { $0.dueAt <= now }.count
+    }
+
+    /// Reading-mode token pushed into the chapter page for in-flow notes.
+    private var inlineNoteKind: InlineNoteKind {
+        switch readingMode {
+        case .original: .none
+        case .bilingual: .bilingual
+        case .companion: .companion
+        }
+    }
+
+    /// Intra-chapter progress, for the overview card's "你在这里" marker.
+    private var intraChapterFraction: Double {
+        let length = currentChapterRecord?.utf16Length ?? 0
+        guard length > 0 else { return 0 }
+        return min(1, Double(currentUTF16Offset) / Double(length))
+    }
+
+    /// Estimated minutes for the current chapter ("本章约 X 分钟").
+    private var chapterMinutes: Int {
+        ReadingTimeEstimate.minutes(
+            utf16Length: currentChapterRecord?.utf16Length ?? 0,
+            languageTag: book.languageTag
+        )
     }
 
     var body: some View {
@@ -122,10 +155,16 @@ struct MacReaderScreen: View {
                     if isSummaryLoading {
                         ProgressView("生成章节概览…")
                             .padding()
-                    } else if !chapterSummary.isEmpty {
+                    } else if !chapterSummary.isEmpty || chapterOutline != nil {
                         MacChapterSummaryCard(
                             title: epub.chapters[currentChapterIndex].title,
                             summary: chapterSummary,
+                            outline: chapterOutline,
+                            currentPartIndex: ChapterOutline.partIndex(
+                                forProgress: intraChapterFraction
+                            ),
+                            minutes: chapterMinutes,
+                            highlightCount: chapterHighlights.count,
                             onCollapse: { summaryOpen = false }
                         )
                     }
@@ -146,7 +185,7 @@ struct MacReaderScreen: View {
                 }
 
                 if readingMode != .original {
-                    modeGuideBanner
+                    inlineModeStatusBar
                 }
 
                 HStack(spacing: 0) {
@@ -162,6 +201,8 @@ struct MacReaderScreen: View {
                                 resumeUTF16Offset: resumeUTF16Offset,
                                 chapterPlainText: currentChapterPlainText(),
                                 highlights: chapterHighlights,
+                                inlineMode: inlineNoteKind,
+                                inlineNotes: inlineNotes,
                                 onTap: { pendingSelection = nil },
                                 onChapterBoundary: { direction in
                                     crossChapterBoundary(direction, chapterCount: epub.chapters.count)
@@ -174,7 +215,11 @@ struct MacReaderScreen: View {
                                         Task { await detectThoughtLink(for: selection.text) }
                                     }
                                 },
-                                onPositionChange: { updateUTF16Offset(domPrefix: $0) }
+                                onPositionChange: { updateUTF16Offset(domPrefix: $0) },
+                                onVisibleParagraphs: { handleVisibleParagraphs($0) },
+                                onPageInfo: { page, count in
+                                    chapterPageInfo = (page: page, count: count)
+                                }
                             )
 
                             selectionOverlay
@@ -247,14 +292,41 @@ struct MacReaderScreen: View {
             pendingSelection = nil
             refreshChapterHighlights()
             resetChapterArtifacts()
-            Task {
-                await loadChapterSummary()
-                await loadModeGuide()
+            Task { await loadChapterSummary() }
+        }
+        .onChange(of: readingMode) { _, newMode in
+            // The chapter page clears and re-requests notes for the new
+            // mode; cached translations rejoin instantly.
+            inlineNotes = []
+            inlineAIUnavailable = newMode != .original
+                && !AIProviderSettings.load().resolveUsableService()
+                    .service.availability.isAvailable
+        }
+    }
+
+    /// Thin status line under the top bar while 双语对照/导读 is active:
+    /// generation progress, or why nothing is appearing.
+    private var inlineModeStatusBar: some View {
+        HStack(spacing: 8) {
+            if inlineAIUnavailable {
+                Text("朱 · AI 暂不可用 — 在侧栏「AI 状态」配置后,\(readingMode == .bilingual ? "双语对照" : "导读")会随阅读逐段出现。")
+                    .foregroundStyle(palette.accent)
+            } else if !inlineInFlight.isEmpty {
+                ProgressView()
+                    .controlSize(.small)
+                Text(readingMode == .bilingual ? "正在逐段翻译本页…" : "正在逐段生成导读…")
+                    .foregroundStyle(palette.ink3)
+            } else {
+                Text(readingMode == .bilingual
+                    ? "双语对照 · 中文随阅读逐段展开"
+                    : "导读 · 朱批随阅读逐段展开")
+                    .foregroundStyle(palette.ink3)
             }
+            Spacer()
         }
-        .onChange(of: readingMode) { _, _ in
-            Task { await loadModeGuide() }
-        }
+        .font(.system(size: 11.5))
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
     }
 
     @ViewBuilder
@@ -557,6 +629,29 @@ struct MacReaderScreen: View {
                         .font(.system(size: 12.5))
                         .lineSpacing(5)
                         .foregroundStyle(palette.ink2)
+                    HStack(spacing: 8) {
+                        Button("继续追问 ↩") {
+                            askAboutSelection(marginNoteSubject ?? marginNote)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(palette.accent)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .overlay(Capsule().strokeBorder(palette.accent, lineWidth: 1))
+
+                        Button(marginNoteSaved ? "✓ 已存为卡片" : "存为卡片") {
+                            saveMarginNoteCard()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(marginNoteSaved ? palette.accent : palette.ink3)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+                        .disabled(marginNoteSaved)
+                    }
+                    .padding(.top, 8)
                 }
                 .padding(.horizontal, 24)
             }
@@ -570,8 +665,10 @@ struct MacReaderScreen: View {
                 MacThoughtLinkCard(
                     link: thoughtLink,
                     isExpanded: thoughtLinkExpanded,
+                    isSaved: thoughtLinkSaved,
                     onToggle: { thoughtLinkExpanded.toggle() },
                     onOpenNotes: onOpenNotes,
+                    onSaveLink: saveThoughtLinkCard,
                     onAsk: { askAboutSelection(thoughtLink.explanation) }
                 )
             }
@@ -780,6 +877,12 @@ struct MacReaderScreen: View {
             )
             .disabled(currentChapterIndex >= epub.chapters.count - 1)
 
+            if let info = chapterPageInfo, info.count > 1 {
+                Text("本章还剩 \(max(info.count - info.page - 1, 0)) 页")
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(palette.ink3)
+            }
+
             Spacer()
 
             let chapterCount = Double(max(epub.chapters.count, 1))
@@ -829,12 +932,16 @@ struct MacReaderScreen: View {
                         groundedIn: [passage]
                     )
                     marginNote = answer.text
+                    marginNoteSubject = selection.text
+                    marginNoteSaved = false
                 case .translate:
                     let answer = try await service.answer(
                         question: "Translate this passage into natural Chinese, preserving literary tone.",
                         groundedIn: [passage]
                     )
                     marginNote = answer.text
+                    marginNoteSubject = selection.text
+                    marginNoteSaved = false
                 case .ask:
                     askAboutSelection(selection.text)
                 case .vocab:
@@ -875,18 +982,30 @@ struct MacReaderScreen: View {
 
     private func resetChapterArtifacts() {
         chapterSummary = ""
+        chapterOutline = nil
+        chapterPageInfo = nil
         modeGuideText = ""
         thoughtLink = nil
         thoughtLinkExpanded = false
+        thoughtLinkSaved = false
         marginNote = nil
+        marginNoteSubject = nil
+        marginNoteSaved = false
         glossEntry = nil
         pendingSelection = nil
+        inlineNotes = []
     }
 
     private func loadChapterSummary() async {
         guard summaryOpen else { return }
         isSummaryLoading = true
         defer { isSummaryLoading = false }
+
+        // EPUB chapters get the structured three-part outline; PDF pages
+        // are too short for one and keep the flat digest.
+        if epubBook != nil {
+            await loadChapterOutline()
+        }
 
         if let cached = currentChapterRecord?.cachedSummary, !cached.isEmpty {
             chapterSummary = cached
@@ -907,6 +1026,135 @@ struct MacReaderScreen: View {
         } catch {
             chapterSummary = "章节概览暂不可用 — \(error.localizedDescription)"
         }
+    }
+
+    /// Loads (or generates and caches) the three-part chapter outline that
+    /// upgrades the overview card from a flat digest to the prototype's
+    /// ① ② ③ grid.
+    private func loadChapterOutline() async {
+        if let cached = currentChapterRecord?.cachedOutline,
+           let outline = ChapterOutline.parse(cached) {
+            chapterOutline = outline
+            return
+        }
+        guard let text = currentChapterRecord?.text, !text.isEmpty else { return }
+        let resolution = AIProviderSettings.load().resolveUsableService()
+        guard resolution.service.availability.isAvailable else { return }
+        do {
+            let answer = try await resolution.service.answer(
+                question: ChapterOutline.prompt,
+                groundedIn: [GroundedPassage(id: 0, text: String(text.prefix(6_000)))]
+            )
+            guard let outline = ChapterOutline.parse(answer.text) else { return }
+            chapterOutline = outline
+            if let chapter = currentChapterRecord {
+                chapter.cachedOutline = outline.serialized
+                try? modelContext.save()
+            }
+        } catch {
+            // The flat summary remains the fallback.
+        }
+    }
+
+    // MARK: Inline notes (双语对照 / 导读)
+
+    private func inlineKey(_ mode: MacReadingMode, _ chapter: Int, _ idx: Int) -> String {
+        "\(mode.rawValue)|\(chapter)|\(idx)"
+    }
+
+    /// Called whenever the chapter page reports the paragraphs the reader
+    /// is looking at: replays cached notes instantly and translates the
+    /// missing ones, in reading order.
+    private func handleVisibleParagraphs(_ paragraphs: [ReaderParagraph]) {
+        guard readingMode != .original else { return }
+        let mode = readingMode
+        let chapter = currentChapterIndex
+        var missing: [ReaderParagraph] = []
+        for paragraph in paragraphs {
+            let key = inlineKey(mode, chapter, paragraph.idx)
+            if let cached = inlineCache[key] {
+                if !cached.isEmpty,
+                   !inlineNotes.contains(where: { $0.idx == paragraph.idx }) {
+                    inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: cached))
+                }
+            } else if !inlineInFlight.contains(key) {
+                inlineInFlight.insert(key)
+                missing.append(paragraph)
+            }
+        }
+        guard !missing.isEmpty else { return }
+        Task { await translateParagraphs(missing, mode: mode, chapter: chapter) }
+    }
+
+    private func translateParagraphs(
+        _ paragraphs: [ReaderParagraph],
+        mode: MacReadingMode,
+        chapter: Int
+    ) async {
+        let resolution = AIProviderSettings.load().resolveUsableService()
+        guard resolution.service.availability.isAvailable else {
+            for paragraph in paragraphs {
+                inlineInFlight.remove(inlineKey(mode, chapter, paragraph.idx))
+            }
+            return
+        }
+        let question = mode == .bilingual
+            ? "Translate this paragraph into natural, literary Simplified Chinese. Output only the translation, nothing else."
+            : "用平实的现代中文把这段话的意思讲清楚,保留关键意象与语气,不超过三句。只输出导读文本。"
+        for paragraph in paragraphs {
+            let key = inlineKey(mode, chapter, paragraph.idx)
+            defer { inlineInFlight.remove(key) }
+            // Reader moved on — skip the model call, leave it uncached.
+            guard readingMode == mode, currentChapterIndex == chapter else { continue }
+            do {
+                let answer = try await resolution.service.answer(
+                    question: question,
+                    groundedIn: [GroundedPassage(id: 0, text: paragraph.text)]
+                )
+                let text = answer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                inlineCache[key] = text
+                if readingMode == mode, currentChapterIndex == chapter, !text.isEmpty {
+                    inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
+                }
+            } catch {
+                // Cache the failure so a flaky provider isn't re-polled on
+                // every page turn.
+                inlineCache[key] = ""
+            }
+        }
+    }
+
+    // MARK: Saved cards
+
+    /// 朱批边注 → 问答卡 in the notes screen.
+    private func saveMarginNoteCard() {
+        guard let marginNote, !marginNoteSaved else { return }
+        let subject = (marginNoteSubject ?? "这一段").prefix(80)
+        let card = StudyCardEntry(
+            question: "朱批:\(subject)",
+            answer: marginNote,
+            source: chapterSourceLabel,
+            kind: .qa
+        )
+        card.book = book
+        modelContext.insert(card)
+        try? modelContext.save()
+        marginNoteSaved = true
+    }
+
+    /// 思维链接 → 链接卡 in the notes screen.
+    private func saveThoughtLinkCard() {
+        guard let thoughtLink, !thoughtLinkSaved else { return }
+        let card = StudyCardEntry(
+            question: "「\(thoughtLink.currentText.prefix(60))」 ⟷ 「\(thoughtLink.relatedText.prefix(60))」",
+            answer: thoughtLink.explanation,
+            source: "\(thoughtLink.currentSource) ⟷ \(thoughtLink.relatedSource)",
+            kind: .link
+        )
+        card.book = book
+        modelContext.insert(card)
+        try? modelContext.save()
+        thoughtLinkSaved = true
     }
 
     private func loadModeGuide() async {
@@ -945,6 +1193,7 @@ struct MacReaderScreen: View {
                     link.explanation = explained
                 }
                 thoughtLink = link
+                thoughtLinkSaved = false
             }
         } catch {
             thoughtLink = nil

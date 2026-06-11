@@ -191,6 +191,11 @@ private struct ContinueReadingHero: View {
     var onOpen: (Book) -> Void
 
     @Environment(\.emptyPalette) private var palette
+    @Environment(\.modelContext) private var modelContext
+
+    @State private var heroRecap: String?
+    @State private var chapterLabel: String?
+    @State private var remainingLabel: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 28) {
@@ -201,7 +206,12 @@ private struct ContinueReadingHero: View {
                 HStack(spacing: 10) {
                     Text("继续阅读")
                         .emptyChip(foreground: palette.accent, background: palette.accentSoft)
-                    if let openedAt = book.lastOpenedAt {
+                    if let chapterLabel {
+                        Text(chapterLabel)
+                            .font(.system(size: 12))
+                            .foregroundStyle(palette.ink3)
+                            .lineLimit(1)
+                    } else if let openedAt = book.lastOpenedAt {
                         Text("上次阅读 \(openedAt.formatted(.relative(presentation: .named)))")
                             .font(.system(size: 12))
                             .foregroundStyle(palette.ink3)
@@ -223,10 +233,11 @@ private struct ContinueReadingHero: View {
                 .padding(.top, 12)
 
                 ZhupiCallout(title: "朱批 · 上次读到") {
-                    Text("第 \(book.position.chapterIndex + 1) 章。打开后,可随时呼出「朱 · AI 伴读」回顾前情、就这一页提问 — 只根据你已读的部分回答,不剧透。")
+                    Text(heroRecap ?? fallbackTeaser)
                         .font(.system(size: 13.5))
                         .lineSpacing(5)
                         .foregroundStyle(palette.ink2)
+                        .lineLimit(4)
                 }
                 .padding(.top, 12)
 
@@ -250,7 +261,7 @@ private struct ContinueReadingHero: View {
                         .tint(palette.accent)
                         .frame(maxWidth: 280)
 
-                    Text(book.progressFraction, format: .percent.precision(.fractionLength(0)))
+                    Text(progressLabel)
                         .font(.system(size: 12))
                         .foregroundStyle(palette.ink3)
                 }
@@ -259,6 +270,86 @@ private struct ContinueReadingHero: View {
         }
         .padding(EdgeInsets(top: 26, leading: 28, bottom: 26, trailing: 28))
         .emptyCard(palette, radius: 18)
+        .task(id: "\(book.id)-\(book.position.chapterIndex)") {
+            await loadHeroDetails()
+        }
+    }
+
+    private var fallbackTeaser: String {
+        "第 \(book.position.chapterIndex + 1) 章。打开后,可随时呼出「朱 · AI 伴读」回顾前情、就这一页提问 — 只根据你已读的部分回答,不剧透。"
+    }
+
+    private var progressLabel: String {
+        let percent = "\(Int((book.progressFraction * 100).rounded()))%"
+        if let remainingLabel {
+            return "\(percent) · \(remainingLabel)"
+        }
+        return percent
+    }
+
+    /// Fills the chapter label, remaining-time estimate, and — when it's
+    /// cheap — the spoiler-safe AI "上次读到" recap.
+    private func loadHeroDetails() async {
+        let bookID = book.id
+        let chapterIndex = book.position.chapterIndex
+        let chapters = (try? modelContext.fetch(
+            FetchDescriptor<Chapter>(
+                predicate: #Predicate { $0.bookID == bookID },
+                sortBy: [SortDescriptor(\.index)]
+            )
+        )) ?? []
+
+        if let current = chapters.first(where: { $0.index == chapterIndex }) {
+            var label = "第 \(chapterIndex + 1) 章"
+            if let title = current.title, !title.isEmpty {
+                label += " · \(title)"
+            }
+            chapterLabel = label
+        }
+
+        let totalLength = chapters.reduce(0) { $0 + $1.utf16Length }
+        remainingLabel = ReadingTimeEstimate.remainingLabel(
+            totalUTF16Length: totalLength,
+            progressFraction: book.progressFraction,
+            languageTag: book.languageTag
+        )
+
+        if let cached = book.cachedHeroRecap, !cached.isEmpty,
+           book.cachedHeroRecapChapterIndex == chapterIndex {
+            heroRecap = cached
+            return
+        }
+        guard chapterIndex > 0 else { return }
+        // Only auto-build when every prior chapter already carries a cached
+        // condensation — then the recap is a single cheap reduce call. The
+        // expensive map pass stays an explicit choice (RecapView).
+        let prior = chapters.filter { $0.index < chapterIndex }
+        guard !prior.isEmpty, prior.allSatisfy({ chapter in
+            chapter.cachedSummary?.isEmpty == false
+                || chapter.utf16Length < RecapBuilder.inlineSummaryThreshold
+        }) else { return }
+
+        let resolution = AIProviderSettings.load().resolveUsableService()
+        guard resolution.service.availability.isAvailable else { return }
+        do {
+            let recap = try await RecapBuilder(
+                modelContext: modelContext,
+                summarize: { text, focus in
+                    try await resolution.service.summarize(text, focus: focus)
+                }
+            ).recap(
+                for: book,
+                before: ReadingPosition(chapterIndex: chapterIndex, utf16Offset: 0)
+            )
+            let trimmed = recap.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            heroRecap = trimmed
+            book.cachedHeroRecap = trimmed
+            book.cachedHeroRecapChapterIndex = chapterIndex
+            try? modelContext.save()
+        } catch {
+            // The static teaser stays.
+        }
     }
 }
 

@@ -966,10 +966,14 @@ struct ChapterWebView: NSViewRepresentable {
     let resumeUTF16Offset: Int
     let chapterPlainText: String?
     let highlights: [HighlightPaint]
+    var inlineMode: InlineNoteKind = .none
+    var inlineNotes: [InlineNotePaint] = []
     let onTap: () -> Void
     let onChapterBoundary: (PageTurnDirection) -> Void
     let onSelectionChange: (ReaderSelection?) -> Void
     let onPositionChange: (String) -> Void
+    var onVisibleParagraphs: ([ReaderParagraph]) -> Void = { _ in }
+    var onPageInfo: (Int, Int) -> Void = { _, _ in }
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -980,6 +984,8 @@ struct ChapterWebView: NSViewRepresentable {
         syncCoordinator(context.coordinator)
         context.coordinator.currentChapter = chapter.href
         context.coordinator.paints = highlights
+        context.coordinator.inlineKind = inlineMode
+        context.coordinator.inlineNotes = inlineNotes
         loadChapter(in: webView)
         return webView
     }
@@ -989,6 +995,8 @@ struct ChapterWebView: NSViewRepresentable {
         if context.coordinator.currentChapter != chapter.href {
             context.coordinator.currentChapter = chapter.href
             context.coordinator.paints = highlights
+            context.coordinator.inlineKind = inlineMode
+            context.coordinator.inlineNotes = inlineNotes
             loadChapter(in: webView)
         } else {
             webView.evaluateJavaScript(
@@ -997,6 +1005,15 @@ struct ChapterWebView: NSViewRepresentable {
             if context.coordinator.paints != highlights {
                 context.coordinator.paints = highlights
                 context.coordinator.applyPaints(on: webView)
+            }
+            if context.coordinator.inlineKind != inlineMode {
+                context.coordinator.inlineKind = inlineMode
+                context.coordinator.inlineNotes = inlineNotes
+                context.coordinator.applyInlineMode(on: webView)
+                context.coordinator.applyInlineNotes(on: webView)
+            } else if context.coordinator.inlineNotes != inlineNotes {
+                context.coordinator.inlineNotes = inlineNotes
+                context.coordinator.applyInlineNotes(on: webView)
             }
         }
     }
@@ -1022,6 +1039,8 @@ extension ChapterWebView {
         bridge.onChapterBoundary = onChapterBoundary
         bridge.onSelectionChange = onSelectionChange
         bridge.onPositionChange = onPositionChange
+        bridge.onVisibleParagraphs = onVisibleParagraphs
+        bridge.onPageInfo = onPageInfo
     }
 
     func loadChapter(in webView: WKWebView) {
@@ -1037,6 +1056,12 @@ extension ChapterWebView {
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <style>
             * { box-sizing: border-box; }
+            :root {
+                --e-ink2: \(isDarkMode ? "#C4B9A4" : "#5C5443");
+                --e-line2: \(isDarkMode ? "#453C2F" : "#D8CEBB");
+                --e-acc: \(isDarkMode ? "#D86B47" : "#B5482A");
+                --e-acc-soft: \(isDarkMode ? "rgba(216,107,71,0.12)" : "rgba(181,72,42,0.08)");
+            }
             html {
                 height: 100%;
                 overflow: hidden;
@@ -1091,19 +1116,163 @@ extension ChapterWebView {
             }
             table { border-collapse: collapse; max-width: 100%; }
             td, th { border: 1px solid \(isDarkMode ? "#444" : "#ddd"); padding: 8px; }
+            /* 双语对照: quiet gray serif under the original paragraph. */
+            div[data-einject="bi"] {
+                font-family: "Noto Serif SC", "Songti SC", serif;
+                font-size: 0.78em;
+                line-height: 2;
+                color: var(--e-ink2);
+                margin: 4px 0 14px;
+                padding-left: 14px;
+                border-left: 1px solid var(--e-line2);
+                text-align: justify;
+            }
+            /* 导读: a 朱批 callout that retells the paragraph. */
+            div[data-einject="comp"] {
+                border-left: 2px solid var(--e-acc);
+                padding: 10px 16px;
+                background: var(--e-acc-soft);
+                border-radius: 0 12px 12px 0;
+                margin: 4px 0 14px;
+                font-size: 0.74em;
+                line-height: 1.8;
+                color: var(--e-ink2);
+                break-inside: avoid;
+            }
+            div[data-einject="comp"]::before {
+                content: '导读';
+                display: block;
+                font-size: 0.82em;
+                font-weight: 700;
+                color: var(--e-acc);
+                letter-spacing: 0.1em;
+                margin-bottom: 4px;
+            }
         </style>
         <script>
         let pageIndex = 0;
+        // ---- Inline notes (双语对照 / 导读) ----
+        // 'none' | 'bi' | 'comp'. Injected blocks carry data-einject and are
+        // invisible to position math, highlight anchoring and selection.
+        let inlineKind = 'none';
+        let appliedNotes = {};
         function pageWidth() { return window.innerWidth; }
         function readerPageCount() {
             return Math.max(1, Math.round(document.body.scrollWidth / pageWidth()));
         }
-        function buildNormalizedBuffer() {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        // Text walker that skips injected inline notes, so the chapter's
+        // normalized buffer matches the stored plain text exactly.
+        function readerTextWalker() {
+            return document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+                acceptNode: function (node) {
+                    return node.parentElement && node.parentElement.closest('[data-einject]')
+                        ? NodeFilter.FILTER_REJECT
+                        : NodeFilter.FILTER_ACCEPT;
+                }
+            });
+        }
+        function readerParagraphs() {
+            return Array.prototype.slice.call(document.querySelectorAll('p'));
+        }
+        // Page a paragraph starts on, stable even mid smooth-scroll:
+        // rect.left is viewport-relative, so adding scrollLeft recovers the
+        // absolute x inside the column flow.
+        function paragraphPage(p) {
+            const abs = p.getBoundingClientRect().left + document.body.scrollLeft;
+            return Math.floor(abs / pageWidth());
+        }
+        // Paragraphs the reader is looking at: those starting on the current
+        // page, plus the straddler flowing in from the previous page.
+        function visibleParagraphIndexes() {
+            const paras = readerParagraphs();
+            const out = [];
+            let straddler = -1;
+            for (let i = 0; i < paras.length; i++) {
+                const page = paragraphPage(paras[i]);
+                if (page < pageIndex) { straddler = i; }
+                else if (page === pageIndex) { out.push(i); }
+                else if (page > pageIndex) { break; }
+            }
+            if (straddler >= 0) { out.unshift(straddler); }
+            return out;
+        }
+        function reportInlineParagraphs() {
+            if (inlineKind === 'none') { return; }
+            const paras = readerParagraphs();
+            const items = [];
+            visibleParagraphIndexes().forEach(function (idx) {
+                if (items.length >= 6 || appliedNotes[idx]) { return; }
+                const text = paras[idx].innerText.replace(/\\s+/g, ' ').trim();
+                if (text.length < 40 || text.length > 4000) { return; }
+                items.push({ idx: idx, text: text });
+            });
+            if (items.length) { post({ type: 'paragraphs', items: items }); }
+        }
+        function clearInlineNotes() {
+            document.querySelectorAll('[data-einject]').forEach(function (el) {
+                el.remove();
+            });
+            appliedNotes = {};
+        }
+        function readerSetInlineMode(kind) {
+            if (kind === inlineKind) { reportInlineParagraphs(); return; }
+            const anchors = visibleParagraphIndexes();
+            inlineKind = kind;
+            clearInlineNotes();
+            requestAnimationFrame(function () {
+                if (anchors.length) {
+                    const p = readerParagraphs()[anchors[0]];
+                    if (p) { pageIndex = Math.max(0, paragraphPage(p)); }
+                }
+                readerGoTo(pageIndex, false);
+                reportInlineParagraphs();
+            });
+        }
+        function readerApplyInlineNotes(items) {
+            if (inlineKind === 'none') { return; }
+            const paras = readerParagraphs();
+            const anchors = visibleParagraphIndexes();
+            let changed = false;
+            items.forEach(function (item) {
+                if (appliedNotes[item.idx]) { return; }
+                const p = paras[item.idx];
+                if (!p) { return; }
+                const div = document.createElement('div');
+                div.setAttribute('data-einject', inlineKind);
+                div.textContent = item.text;
+                p.insertAdjacentElement('afterend', div);
+                appliedNotes[item.idx] = true;
+                changed = true;
+            });
+            if (!changed) { return; }
+            // Inserting blocks reflows the columns; stay on the page where
+            // the first visible paragraph now lives.
+            requestAnimationFrame(function () {
+                if (anchors.length) {
+                    const p = readerParagraphs()[anchors[0]];
+                    if (p) { pageIndex = Math.max(0, paragraphPage(p)); }
+                }
+                readerGoTo(pageIndex, false);
+            });
+        }
+        // Normalized chapter text up to the end of the last element that
+        // starts on `pageIdx` or earlier. Walks only original content, so
+        // injected inline notes never skew reading progress.
+        function normalizedTextPrefixThroughPage(pageIdx) {
+            const walker = readerTextWalker();
             let normBuffer = '';
             let lastWasSpace = true;
             while (walker.nextNode()) {
-                const value = walker.currentNode.nodeValue;
+                const node = walker.currentNode;
+                const el = node.parentElement;
+                if (el) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width || rect.height) {
+                        const abs = rect.left + document.body.scrollLeft;
+                        if (Math.floor(abs / pageWidth()) > pageIdx) { break; }
+                    }
+                }
+                const value = node.nodeValue;
                 for (let i = 0; i < value.length; i++) {
                     if (/\\s/.test(value[i])) {
                         if (!lastWasSpace) {
@@ -1118,16 +1287,14 @@ extension ChapterWebView {
             }
             return normBuffer;
         }
-        function normalizedTextPrefixThroughPage(pageIdx) {
-            const normBuffer = buildNormalizedBuffer();
-            if (!normBuffer) { return ''; }
-            const pageCount = readerPageCount();
-            const charsPerPage = Math.max(1, Math.ceil(normBuffer.length / pageCount));
-            const endChar = Math.min((pageIdx + 1) * charsPerPage, normBuffer.length);
-            return normBuffer.slice(0, endChar);
-        }
         function reportPosition() {
-            post({ type: 'position', prefix: normalizedTextPrefixThroughPage(pageIndex) });
+            post({
+                type: 'position',
+                prefix: normalizedTextPrefixThroughPage(pageIndex),
+                page: pageIndex,
+                pageCount: readerPageCount()
+            });
+            reportInlineParagraphs();
         }
         function applyPage(animated) {
             document.body.scrollTo({
@@ -1180,6 +1347,11 @@ extension ChapterWebView {
             document.body.style.lineHeight = lineSpacing;
             document.body.style.backgroundColor = bg;
             document.body.style.color = fg;
+            const root = document.documentElement.style;
+            root.setProperty('--e-ink2', isDark ? '#C4B9A4' : '#5C5443');
+            root.setProperty('--e-line2', isDark ? '#453C2F' : '#D8CEBB');
+            root.setProperty('--e-acc', isDark ? '#D86B47' : '#B5482A');
+            root.setProperty('--e-acc-soft', isDark ? 'rgba(216,107,71,0.12)' : 'rgba(181,72,42,0.08)');
             // Reflow shuffles content between columns; reapply the kept page.
             requestAnimationFrame(function () { readerGoTo(pageIndex, false); });
         }
@@ -1274,7 +1446,7 @@ extension ChapterWebView {
         function paintHighlight(id, rawText) {
             const needle = rawText.replace(/\\s+/g, ' ').trim();
             if (!needle) { return; }
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            const walker = readerTextWalker();
             let normBuffer = '';
             const map = [];
             let lastWasSpace = true;
@@ -1305,7 +1477,7 @@ extension ChapterWebView {
             wrapRange(range, id);
         }
         function wrapRange(range, id) {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            const walker = readerTextWalker();
             const targets = [];
             while (walker.nextNode()) {
                 const node = walker.currentNode;

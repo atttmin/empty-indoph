@@ -28,6 +28,8 @@ final class CompanionModel {
         var text: String
         /// Citation chip, e.g. a chapter title — only on grounded answers.
         var source: String?
+        /// The user question this AI answer responded to; enables 存为卡片.
+        var question: String?
     }
 
     var messages: [Message] = [
@@ -93,7 +95,8 @@ final class CompanionModel {
                 messages.append(Message(
                     role: .ai,
                     text: answer.text,
-                    source: citedChunk.flatMap(Self.sourceTitle(for:))
+                    source: citedChunk.flatMap(Self.sourceTitle(for:)),
+                    question: question
                 ))
             } catch is CancellationError {
                 // Panel torn down mid-flight.
@@ -126,6 +129,8 @@ struct MacCompanionPanel: View {
     @Environment(\.emptyPalette) private var palette
     @Environment(\.modelContext) private var modelContext
     @FocusState private var inputFocused: Bool
+    /// Answers already saved as 问答卡 this visit.
+    @State private var savedMessageIDs: Set<UUID> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -226,14 +231,8 @@ struct MacCompanionPanel: View {
                     .lineSpacing(4.5)
                     .foregroundStyle(palette.ink2)
                     .textSelection(.enabled)
-                if let source = message.source {
-                    Text("原文 · \(source)")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(palette.accent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 3)
-                        .background(palette.accentSoft, in: Capsule())
-                        .overlay(Capsule().strokeBorder(palette.accentSoft2, lineWidth: 1))
+                if message.source != nil || message.question != nil {
+                    saveRow(for: message)
                 }
             }
             .padding(.horizontal, 14)
@@ -254,6 +253,50 @@ struct MacCompanionPanel: View {
             )
             .padding(.trailing, 28)
         }
+    }
+
+    /// Citation chip plus the 存为卡片 action under an AI answer.
+    private func saveRow(for message: CompanionModel.Message) -> some View {
+        HStack(spacing: 6) {
+            if let source = message.source {
+                Text("原文 · \(source)")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(palette.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+                    .background(palette.accentSoft, in: Capsule())
+                    .overlay(Capsule().strokeBorder(palette.accentSoft2, lineWidth: 1))
+            }
+            if message.question != nil {
+                let isSaved = savedMessageIDs.contains(message.id)
+                Button(isSaved ? "✓ 已存为卡片" : "存为卡片") {
+                    saveCard(for: message)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10.5))
+                .foregroundStyle(isSaved ? palette.accent : palette.ink3)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+                .disabled(isSaved)
+            }
+        }
+    }
+
+    /// 伴读问答 → 问答卡 in the notes screen.
+    private func saveCard(for message: CompanionModel.Message) {
+        guard let question = message.question,
+              !savedMessageIDs.contains(message.id) else { return }
+        let card = StudyCardEntry(
+            question: question,
+            answer: message.text,
+            source: "\(bookTitle) · \(chapterTitle)",
+            kind: .qa
+        )
+        card.book = book
+        modelContext.insert(card)
+        try? modelContext.save()
+        savedMessageIDs.insert(message.id)
     }
 
     private var composer: some View {

@@ -121,9 +121,19 @@ struct MacSelectionPopover: View {
 struct MacChapterSummaryCard: View {
     let title: String
     let summary: String
+    /// Structured ① ② ③ outline; when present it replaces the flat text.
+    var outline: ChapterOutline?
+    /// Which outline part the reader is in ("← 你在这里").
+    var currentPartIndex: Int = 0
+    /// Estimated chapter reading time; hidden when 0.
+    var minutes: Int = 0
+    /// 朱批 in this chapter; mentioned when > 0.
+    var highlightCount: Int = 0
     var onCollapse: () -> Void
 
     @Environment(\.emptyPalette) private var palette
+
+    private static let partGlyphs = ["①", "②", "③"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -142,16 +152,71 @@ struct MacChapterSummaryCard: View {
                     .font(.system(size: 12))
                     .foregroundStyle(palette.ink3)
             }
-            Text(summary)
-                .font(.system(size: 12.5))
-                .lineSpacing(6)
-                .foregroundStyle(palette.ink2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let outline {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(Array(outline.parts.enumerated()), id: \.offset) { index, part in
+                        outlineCell(index: index, part: part)
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    if minutes > 0 {
+                        Text(footnote)
+                            .font(.system(size: 11))
+                            .foregroundStyle(palette.ink3)
+                    }
+                    Spacer()
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { index in
+                            Capsule()
+                                .fill(pillColor(index))
+                                .frame(width: 18, height: 4)
+                        }
+                    }
+                }
+            } else {
+                Text(summary)
+                    .font(.system(size: 12.5))
+                    .lineSpacing(6)
+                    .foregroundStyle(palette.ink2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(18)
         .emptyCard(palette, radius: 14)
         .padding(.horizontal, 24)
         .padding(.top, 12)
+    }
+
+    private var footnote: String {
+        var parts = ["本章约 \(minutes) 分钟"]
+        if highlightCount > 0 {
+            parts.append("\(highlightCount) 条朱批")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func outlineCell(index: Int, part: ChapterOutline.Part) -> some View {
+        (
+            Text("\(Self.partGlyphs[min(index, 2)]) \(part.title)")
+                .font(.system(size: 12.5, weight: .bold))
+                .foregroundStyle(palette.ink)
+            + Text("\n\(part.detail)")
+                .font(.system(size: 12.5))
+                .foregroundStyle(palette.ink2)
+            + Text(index == currentPartIndex ? " ← 你在这里" : "")
+                .font(.system(size: 12.5))
+                .foregroundStyle(palette.accent)
+        )
+        .lineSpacing(5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func pillColor(_ index: Int) -> Color {
+        if index < currentPartIndex { return palette.accent }
+        if index == currentPartIndex { return palette.accent.opacity(0.55) }
+        return palette.line2
     }
 }
 
@@ -204,8 +269,10 @@ struct MacReadingAloudBar: View {
 struct MacThoughtLinkCard: View {
     let link: ThoughtLink
     var isExpanded: Bool
+    var isSaved: Bool = false
     var onToggle: () -> Void
     var onOpenNotes: () -> Void
+    var onSaveLink: () -> Void = {}
     var onAsk: () -> Void
 
     @Environment(\.emptyPalette) private var palette
@@ -248,6 +315,14 @@ struct MacThoughtLinkCard: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 6)
                             .background(palette.accent, in: Capsule())
+                        Button(isSaved ? "✓ 已存为链接卡" : "存为链接卡", action: onSaveLink)
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(isSaved ? palette.accent : palette.ink2)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+                            .disabled(isSaved)
                         Button("就此追问 ↩", action: onAsk)
                             .buttonStyle(.plain)
                             .font(.system(size: 11.5))
@@ -289,6 +364,7 @@ struct MacThoughtLinkCard: View {
 struct MacKnowledgeGraph: View {
     let nodes: [String]
     var aiSuggestion: String
+    var onShowFull: () -> Void = {}
 
     @Environment(\.emptyPalette) private var palette
 
@@ -342,7 +418,7 @@ struct MacKnowledgeGraph: View {
                     }
             }
 
-            Button("查看完整图谱 →") {}
+            Button("查看完整图谱 →", action: onShowFull)
                 .buttonStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(palette.accent)

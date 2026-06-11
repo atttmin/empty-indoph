@@ -23,6 +23,8 @@ struct MacVocabScreen: View {
     @State private var reviewIndex = 0
     @State private var revealed = false
     @State private var sessionLog: [VocabReviewGrade] = []
+    /// Row expanded in 全部生词 to show the word's original context.
+    @State private var expandedEntryID: UUID?
 
     private var dueEntries: [VocabEntry] {
         entries.filter { $0.dueAt <= now }
@@ -174,7 +176,9 @@ struct MacVocabScreen: View {
             }
 
             if let sentence = entry.sentence, !sentence.isEmpty {
-                Text("\"\(sentence)\"")
+                // 挖空原句: the word stays blanked until the reveal, so the
+                // sentence tests recall instead of giving the answer away.
+                Text("\"\(revealed ? sentence : VocabCloze.blank(sentence, word: entry.word))\"")
                     .font(.system(size: 15.5, design: .serif))
                     .italic()
                     .lineSpacing(6)
@@ -258,9 +262,14 @@ struct MacVocabScreen: View {
                 .font(.system(size: 20, weight: .black, design: .serif))
                 .foregroundStyle(palette.ink)
                 .padding(.top, 6)
-            Text("本轮 \(sessionLog.count) 词 · 记得 \(sessionLog.filter { $0 == .good }.count) · 模糊 \(sessionLog.filter { $0 == .fuzzy }.count)")
+            Text(sessionSummary)
                 .font(.system(size: 13))
                 .foregroundStyle(palette.ink2)
+            if !nextQueueLabel.isEmpty {
+                Text("下次队列:\(nextQueueLabel)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(palette.ink3)
+            }
             Button("↻ 再练一轮") {
                 reviewIndex = 0
                 revealed = false
@@ -287,8 +296,34 @@ struct MacVocabScreen: View {
             Text("继续阅读,选中词语加入生词本,这里会按记忆曲线安排复习。")
                 .font(.system(size: 13))
                 .foregroundStyle(palette.ink3)
+            if !nextQueueLabel.isEmpty {
+                Text("下次队列:\(nextQueueLabel)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(palette.ink3)
+                    .padding(.top, 4)
+            }
             Spacer()
         }
+    }
+
+    /// 升级/回炉 tally for the finished session, in the prototype's voice.
+    private var sessionSummary: String {
+        let good = sessionLog.count { $0 == .good }
+        let forgot = sessionLog.count { $0 == .forgot }
+        var summary = "\(good) 词升级"
+        if forgot > 0 {
+            summary += " · \(forgot) 词回到 1 天重新巩固"
+        } else if sessionLog.count > 0, good == sessionLog.count {
+            summary += " · 全部记得,漂亮"
+        } else if sessionLog.count - good > 0 {
+            summary += " · \(sessionLog.count - good) 词保持当前间隔"
+        }
+        return summary
+    }
+
+    /// "明天 2 词 · 6月24日 1 词" — when the scheduler will knock next.
+    private var nextQueueLabel: String {
+        VocabQueueForecast.describe(dueDates: entries.map(\.dueAt), now: now)
     }
 
     private var allWordsSection: some View {
@@ -304,26 +339,58 @@ struct MacVocabScreen: View {
 
             VStack(spacing: 0) {
                 ForEach(entries) { entry in
-                    HStack(spacing: 16) {
-                        Text(entry.word)
-                            .font(.system(size: 15.5, weight: .bold, design: .serif))
-                            .foregroundStyle(palette.ink)
-                            .frame(width: 150, alignment: .leading)
-                        Text(entry.meaning)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(palette.ink2)
-                            .lineLimit(1)
+                    VStack(spacing: 0) {
+                        HStack(spacing: 16) {
+                            Text(entry.word)
+                                .font(.system(size: 15.5, weight: .bold, design: .serif))
+                                .foregroundStyle(palette.ink)
+                                .frame(width: 150, alignment: .leading)
+                            Text(entry.meaning)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(palette.ink2)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(entry.source ?? "—")
+                                .font(.system(size: 11))
+                                .foregroundStyle(palette.ink3)
+                                .frame(width: 130, alignment: .leading)
+                                .lineLimit(1)
+                            StagePill(entry: entry)
+                                .frame(width: 88)
+                        }
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 13)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                expandedEntryID = expandedEntryID == entry.id ? nil : entry.id
+                            }
+                        }
+
+                        if expandedEntryID == entry.id {
+                            VStack(alignment: .leading, spacing: 6) {
+                                if let sentence = entry.sentence, !sentence.isEmpty {
+                                    Text("\u{201C}\(sentence)\u{201D}")
+                                        .font(.system(size: 13, design: .serif))
+                                        .italic()
+                                        .lineSpacing(5)
+                                        .foregroundStyle(palette.ink)
+                                } else {
+                                    Text("没有记录这个词的原文语境。")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(palette.ink3)
+                                }
+                                if let note = entry.note, !note.isEmpty {
+                                    Text(note)
+                                        .font(.system(size: 12))
+                                        .lineSpacing(4)
+                                        .foregroundStyle(palette.ink2)
+                                }
+                            }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(entry.source ?? "—")
-                            .font(.system(size: 11))
-                            .foregroundStyle(palette.ink3)
-                            .frame(width: 130, alignment: .leading)
-                            .lineLimit(1)
-                        StagePill(entry: entry)
-                            .frame(width: 88)
+                            .padding(EdgeInsets(top: 0, leading: 22, bottom: 14, trailing: 22))
+                        }
                     }
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 13)
                     .overlay(alignment: .bottom) {
                         if entry.id != entries.last?.id {
                             Rectangle().fill(palette.line).frame(height: 1)
@@ -406,15 +473,24 @@ private struct StagePill: View {
     @Environment(\.emptyPalette) private var palette
 
     var body: some View {
-        Text(entry.isStable ? "已掌握" : "D\(entry.intervalDays)")
-            .font(.system(size: 10.5, weight: .bold))
-            .foregroundStyle(entry.isStable ? palette.accent : palette.ink3)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(
-                entry.isStable ? palette.accentSoft : palette.line.opacity(0.5),
-                in: Capsule()
-            )
+        Text(
+            entry.isStable
+                ? "稳固 · \(entry.intervalDays)天"
+                : "第\(entry.stage)轮 · \(entry.intervalDays)天"
+        )
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(entry.isStable ? palette.ink3 : palette.accent)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            entry.isStable ? .clear : palette.accentSoft,
+            in: Capsule()
+        )
+        .overlay {
+            if entry.isStable {
+                Capsule().strokeBorder(palette.line2, lineWidth: 1)
+            }
+        }
     }
 }
 

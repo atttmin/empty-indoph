@@ -264,9 +264,8 @@ private struct MacSidebar: View {
     }
 
     private func progressLabel(for book: Book) -> String {
-        book.progressFraction > 0
-            ? "已读 \(Int(book.progressFraction * 100))%"
-            : "未开始"
+        guard book.progressFraction > 0 else { return "未开始" }
+        return "第 \(book.position.chapterIndex + 1) 章 · \(Int(book.progressFraction * 100))%"
     }
 
     private func footerButton(_ title: String, action: @escaping () -> Void) -> some View {

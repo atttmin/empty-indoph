@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 双语对照 / 导读 in-flow reading modes (Mac, EPUB): the reader translates
+  or retells each paragraph **as you reach it**, injecting quiet gray
+  serif translations (双语) or 朱批-style callouts (导读) directly under
+  the original paragraphs, with per-chapter caching and progress status;
+  position math and highlight anchoring skip the injected blocks
+- Structured AI 章节概览 (Mac, EPUB): the overview card now renders the
+  prototype's ① ② ③ three-part outline with a "← 你在这里" position
+  marker, "本章约 X 分钟" reading-time estimate, and chapter progress
+  pills (cached per chapter in `Chapter.cachedOutline`)
+- Saved study cards become real card types in the notes screen:
+  问答卡 (save a companion answer with 存为卡片), 链接卡 (save a thought
+  link with 存为链接卡), and interactive 复习卡 with 显示答案 / 记得 ✓
+  spaced-repetition grading inline (`StudyCardKind` on `StudyCardEntry`)
+- 朱批边注 action buttons: 继续追问 ↩ hands the explained selection to
+  the companion panel; 存为卡片 keeps the margin note as a 问答卡
+- 查看完整图谱: the knowledge-graph button now opens a full-graph sheet —
+  recent highlight concepts on a ring, edges drawn where passages
+  lexically resonate
+- Library hero upgrades: spoiler-safe AI "朱批 · 上次读到" recap (built
+  from cached chapter summaries, stored on `Book.cachedHeroRecap`),
+  "第 N 章 · <章节名>" label, and a "剩余约 X 小时" estimate; sidebar
+  recent rows show "第 N 章 · X%"
+- 生词本 polish: cloze sentences blank the word until reveal
+  (`nor did I wish to practise ______`), the completed state forecasts
+  the next review queue ("下次队列:明天 2 词 · …"), stage pills use the
+  prototype's "第N轮 · N天 / 稳固 · N天" wording, and 全部生词 rows
+  expand to show the original sentence context
+- Reader bottom bar shows "本章还剩 N 页" from live page geometry
 - PDF reading: import `.pdf` files, native PDFKit viewer with per-page
   navigation, progress tracking, and AI indexing via per-page `Chapter` rows
 - PDF text selection and highlights: selections report through the same
