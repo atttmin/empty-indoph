@@ -126,6 +126,31 @@ struct HighlightStoreTests {
         _ = container
     }
 
+    @Test func updateNoteTrimsWhitespaceAndAllowsClearing() throws {
+        let container = try AppStores.makeContainer(ephemeral: true)
+        let context = container.mainContext
+
+        let book = Book(title: "B", format: .epub)
+        context.insert(book)
+        context.insert(Chapter(bookID: book.id, index: 0, text: "章节正文。"))
+        try context.save()
+
+        let store = HighlightStore(modelContext: context)
+        let highlight = try store.createHighlight(
+            book: book,
+            chapterIndex: 0,
+            selection: "章节正文"
+        )
+
+        try store.updateNote(highlight, note: "  这是我的批注  ")
+        #expect(highlight.note == "这是我的批注")
+
+        try store.updateNote(highlight, note: "   ")
+        #expect(highlight.note == nil)
+
+        _ = container
+    }
+
     @Test func listsPerChapterAndDeletes() throws {
         let container = try AppStores.makeContainer(ephemeral: true)
         let context = container.mainContext

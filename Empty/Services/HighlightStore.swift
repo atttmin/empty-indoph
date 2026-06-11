@@ -78,6 +78,12 @@ struct HighlightStore {
         )
     }
 
+    func updateNote(_ highlight: Highlight, note: String?) throws {
+        let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        highlight.note = trimmed?.isEmpty == false ? trimmed : nil
+        try modelContext.save()
+    }
+
     func delete(_ highlight: Highlight) throws {
         modelContext.delete(highlight)
         try modelContext.save()

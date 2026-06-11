@@ -35,9 +35,9 @@ struct NativeChapterReaderView: View {
     var onPageInfo: (Int, Int) -> Void = { _, _ in }
 
     private let document: NativeChapterDocument
-    private let blockByID: [String: NativeChapterBlock]
     private let blockSpans: [String: NativeTextBlockSpan]
     private let paragraphByID: [String: ReaderParagraph]
+    private let orderedTextSpans: [NativeTextBlockSpan]
     private let coordinateSpace = "NativeChapterReaderView.scroll"
 
     @Environment(\.emptyPalette) private var palette
@@ -86,15 +86,18 @@ struct NativeChapterReaderView: View {
         self.onPageInfo = onPageInfo
 
         let parsed = NativeChapterParser.parse(chapter)
+        let spans = parsed.resolvedTextSpans(in: chapterPlainText)
         self.document = parsed
-        self.blockByID = Dictionary(uniqueKeysWithValues: parsed.blocks.map { ($0.id, $0) })
-        self.blockSpans = parsed.resolvedTextSpans(in: chapterPlainText)
+        self.blockSpans = spans
         self.paragraphByID = Dictionary(
             uniqueKeysWithValues: parsed.blocks.compactMap { block in
                 guard let paragraph = block.readerParagraph else { return nil }
                 return (block.id, paragraph)
             }
         )
+        self.orderedTextSpans = spans.values.sorted {
+            $0.chapterRange.lowerBound < $1.chapterRange.lowerBound
+        }
     }
 
     var body: some View {
@@ -380,12 +383,29 @@ struct NativeChapterReaderView: View {
     }
 
     private func scrollToLanding(with proxy: ScrollViewProxy) {
-        guard let target = document.blockIDForLanding(
+        if let target = preciseLandingTarget() {
+            proxy.scrollTo(
+                target.blockID,
+                anchor: UnitPoint(x: 0.5, y: target.localProgress)
+            )
+            return
+        }
+        guard let blockID = document.blockIDForLanding(
             landing,
             resumeUTF16Offset: resumeUTF16Offset,
             chapterPlainText: chapterPlainText
         ) else { return }
-        proxy.scrollTo(target, anchor: landing == .end ? .bottom : .top)
+        proxy.scrollTo(blockID, anchor: landing == .end ? .bottom : .top)
+    }
+
+    private func preciseLandingTarget() -> (blockID: String, localProgress: CGFloat)? {
+        guard landing == .start, resumeUTF16Offset > 0 else { return nil }
+        guard let span = orderedTextSpans.first(where: { span in
+            resumeUTF16Offset >= span.chapterRange.lowerBound
+                && resumeUTF16Offset < span.chapterRange.upperBound
+        }) else { return nil }
+        let progress = min(max(span.localProgress(for: resumeUTF16Offset), 0.05), 0.95)
+        return (span.blockID, progress)
     }
 
     private func resourceURL(for source: String) -> URL {
@@ -465,6 +485,7 @@ private struct NativeReaderImageView: View {
     let alt: String?
 
     @Environment(\.emptyPalette) private var palette
+    @State private var loadTask: Task<Void, Never>?
     #if canImport(UIKit)
     @State private var image: UIImage?
     #elseif canImport(AppKit)
@@ -496,6 +517,7 @@ private struct NativeReaderImageView: View {
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .onAppear(perform: loadImage)
+        .onDisappear { loadTask?.cancel() }
     }
 
     private var placeholder: some View {
@@ -513,13 +535,35 @@ private struct NativeReaderImageView: View {
     }
 
     private func loadImage() {
+        guard loadTask == nil else { return }
         #if canImport(UIKit)
-        guard image == nil,
-              let data = try? Data(contentsOf: url) else { return }
-        image = UIImage(data: data)
+        guard image == nil else { return }
         #elseif canImport(AppKit)
         guard image == nil else { return }
-        image = NSImage(contentsOf: url)
         #endif
+
+        loadTask = Task(priority: .utility) {
+            guard let data = try? Data(contentsOf: url), !Task.isCancelled else {
+                await MainActor.run { loadTask = nil }
+                return
+            }
+            #if canImport(UIKit)
+            let loadedImage = UIImage(data: data)
+            await MainActor.run {
+                if !Task.isCancelled {
+                    image = loadedImage
+                }
+                loadTask = nil
+            }
+            #elseif canImport(AppKit)
+            let loadedImage = NSImage(data: data)
+            await MainActor.run {
+                if !Task.isCancelled {
+                    image = loadedImage
+                }
+                loadTask = nil
+            }
+            #endif
+        }
     }
 }

@@ -7,11 +7,11 @@ import SwiftData
 import SwiftUI
 
 /// All highlights of one book, in reading order, as 朱批 quote rows.
-/// Tapping jumps the reader to the highlight's chapter; context menu
-/// deletes or generates AI flashcards.
+/// Tapping jumps the reader to the exact anchored position; note editing,
+/// deletion, and flashcard generation stay in-place.
 struct HighlightsListView: View {
     let book: Book
-    let onJump: (Int) -> Void
+    let onJump: (ReadingPosition) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.emptyPalette) private var palette
@@ -21,8 +21,11 @@ struct HighlightsListView: View {
     @State private var generatingHighlightID: UUID?
     @State private var statusMessage: String?
     @State private var showFlashcards = false
+    @State private var editingHighlight: Highlight?
+    @State private var noteDraft = ""
+    @State private var isSavingNote = false
 
-    init(book: Book, onJump: @escaping (Int) -> Void) {
+    init(book: Book, onJump: @escaping (ReadingPosition) -> Void) {
         self.book = book
         self.onJump = onJump
         let bookID = book.id
@@ -88,8 +91,22 @@ struct HighlightsListView: View {
             .frame(minWidth: 480, minHeight: 420)
             #endif
         }
+        .sheet(isPresented: Binding(
+            get: { editingHighlight != nil },
+            set: { if !$0 { editingHighlight = nil } }
+        )) {
+            if let editingHighlight {
+                HighlightNoteEditorSheet(
+                    highlightText: editingHighlight.textSnapshot,
+                    draft: $noteDraft,
+                    isSaving: isSavingNote,
+                    onCancel: { self.editingHighlight = nil },
+                    onSave: { saveNote(for: editingHighlight) }
+                )
+            }
+        }
         .alert(
-            "闪卡",
+            "高亮",
             isPresented: Binding(
                 get: { statusMessage != nil },
                 set: { if !$0 { statusMessage = nil } }
@@ -107,7 +124,7 @@ struct HighlightsListView: View {
                 Text("高亮 · 朱批")
                     .font(.system(size: 17, weight: .black, design: .serif))
                     .foregroundStyle(palette.ink)
-                Text("共 \(highlights.count) 条 · 点击跳转到所在章")
+                Text("共 \(highlights.count) 条 · 点击跳回高亮位置")
                     .font(.system(size: 11))
                     .foregroundStyle(palette.ink3)
             }
@@ -138,10 +155,7 @@ struct HighlightsListView: View {
     }
 
     private func row(_ highlight: Highlight) -> some View {
-        Button {
-            onJump(highlight.chapterIndex)
-            dismiss()
-        } label: {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(palette.highlight)
@@ -150,10 +164,10 @@ struct HighlightsListView: View {
                     Text("\u{201C}\(highlight.textSnapshot)\u{201D}")
                         .font(.system(size: 13, design: .serif))
                         .lineSpacing(5)
-                        .lineLimit(3)
+                        .lineLimit(4)
                         .foregroundStyle(palette.ink)
                     HStack(spacing: 8) {
-                        Text("第 \(highlight.chapterIndex + 1) 章")
+                        Text(positionLine(for: highlight))
                             .font(.system(size: 10.5))
                             .foregroundStyle(palette.ink3)
                         if generatingHighlightID == highlight.id {
@@ -167,20 +181,47 @@ struct HighlightsListView: View {
                         }
                     }
                     if let note = highlight.note, !note.isEmpty {
-                        Text("你的批注:\(note)")
+                        Text("你的批注：\(note)")
                             .font(.system(size: 11.5))
                             .foregroundStyle(palette.ink3)
-                            .lineLimit(2)
+                            .lineLimit(3)
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
-            .emptyCard(palette, radius: 12)
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+
+            HStack(spacing: 10) {
+                actionButton("跳回原文", systemImage: "arrow.turn.up.backward") {
+                    jump(to: highlight)
+                }
+                actionButton(
+                    highlight.note?.isEmpty == false ? "编辑批注" : "写批注",
+                    systemImage: "square.and.pencil"
+                ) {
+                    startEditing(highlight)
+                }
+                actionButton("生成闪卡", systemImage: "rectangle.on.rectangle.angled") {
+                    Task { await generateFlashcards(from: highlight) }
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+        .emptyCard(palette, radius: 12)
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onTapGesture {
+            jump(to: highlight)
+        }
         .contextMenu {
+            Button {
+                jump(to: highlight)
+            } label: {
+                Label("跳回原文", systemImage: "arrow.turn.up.backward")
+            }
+            Button {
+                startEditing(highlight)
+            } label: {
+                Label(highlight.note?.isEmpty == false ? "编辑批注" : "写批注", systemImage: "square.and.pencil")
+            }
             Button {
                 Task { await generateFlashcards(from: highlight) }
             } label: {
@@ -189,6 +230,49 @@ struct HighlightsListView: View {
             Button("删除", systemImage: "trash", role: .destructive) {
                 delete([highlight])
             }
+        }
+    }
+
+    private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(palette.ink2)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(palette.side, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func positionLine(for highlight: Highlight) -> String {
+        if highlight.endUTF16 > highlight.startUTF16 {
+            return "第 \(highlight.chapterIndex + 1) 章 · 已定位"
+        }
+        return "第 \(highlight.chapterIndex + 1) 章 · 仅文本快照"
+    }
+
+    private func jump(to highlight: Highlight) {
+        onJump(ReadingPosition(chapterIndex: highlight.chapterIndex, utf16Offset: highlight.startUTF16))
+        dismiss()
+    }
+
+    private func startEditing(_ highlight: Highlight) {
+        editingHighlight = highlight
+        noteDraft = highlight.note ?? ""
+    }
+
+    private func saveNote(for highlight: Highlight) {
+        isSavingNote = true
+        defer { isSavingNote = false }
+        do {
+            try HighlightStore(modelContext: modelContext).updateNote(
+                highlight,
+                note: noteDraft
+            )
+            editingHighlight = nil
+        } catch {
+            statusMessage = error.localizedDescription
         }
     }
 
@@ -227,5 +311,82 @@ struct HighlightsListView: View {
             modelContext.delete(highlight)
         }
         try? modelContext.save()
+    }
+}
+
+private struct HighlightNoteEditorSheet: View {
+    let highlightText: String
+    @Binding var draft: String
+    let isSaving: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    @Environment(\.emptyPalette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("批注")
+                        .font(.system(size: 18, weight: .bold, design: .serif))
+                        .foregroundStyle(palette.ink)
+                    Text("给这条高亮补一段你的想法。")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(palette.ink3)
+                }
+                Spacer()
+            }
+
+            Text("\u{201C}\(highlightText)\u{201D}")
+                .font(.system(size: 13, design: .serif))
+                .foregroundStyle(palette.ink2)
+                .lineLimit(4)
+                .padding(12)
+                .background(palette.side, in: RoundedRectangle(cornerRadius: 12))
+
+            TextEditor(text: $draft)
+                .font(.system(size: 14, design: .serif))
+                .scrollContentBackground(.hidden)
+                .padding(10)
+                .frame(minHeight: 180)
+                .background(palette.window, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(palette.line2, lineWidth: 1)
+                )
+
+            HStack(spacing: 10) {
+                Button("取消", action: onCancel)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(palette.ink3)
+                Spacer()
+                Button {
+                    onSave()
+                } label: {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                    } else {
+                        Text("保存批注")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(palette.onAccent)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                    }
+                }
+                .buttonStyle(.plain)
+                .background(palette.accent, in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding(20)
+        .background(palette.window)
+        #if os(iOS)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        #else
+        .frame(minWidth: 520, minHeight: 420)
+        #endif
     }
 }
