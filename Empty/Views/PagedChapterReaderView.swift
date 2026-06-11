@@ -788,6 +788,13 @@ private struct PageTextView: UIViewRepresentable {
         textView.isScrollEnabled = false
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.maximumNumberOfLines = 0
+        textView.textContainer.lineBreakMode = .byWordWrapping
+        // Without low compression resistance SwiftUI sizes the view to
+        // its longest unwrapped line, centers the overflow and clips
+        // both edges — the页面 looked like sliced text.
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         textView.dataDetectorTypes = []
         textView.clipsToBounds = true
         textView.delegate = context.coordinator
