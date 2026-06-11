@@ -78,7 +78,7 @@ nonisolated enum IOSReadingMode: String, CaseIterable {
     var title: String {
         switch self {
         case .original: "原文"
-        case .bilingual: "双语对照"
+        case .bilingual: "今译"
         case .companion: "导读"
         case .debate: "辩难"
         case .sources: "文献"
@@ -1205,7 +1205,12 @@ struct ReadingView: View {
                         kind: Self.aiNoteKind(for: mode)
                     )
                 }.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty {
+                // Echoes (same-language "translations") and the 今译
+                // sentinel never paint — and never improve on retry.
+                let worthShowing = InlineNoteQuality.isWorthShowing(
+                    note: text, original: paragraph.text
+                )
+                if worthShowing {
                     TranslationStore(modelContext: modelContext).store(
                         text,
                         bookID: book.id,
@@ -1215,11 +1220,13 @@ struct ReadingView: View {
                     )
                 }
                 guard readingMode == mode else { continue }
-                inlineCache[key] = text
-                if text.isEmpty {
-                    inlineRetryCounts[key, default: 0] += 1
+                if !worthShowing {
+                    inlineCache[key] = ""
+                    inlineRetryCounts[key] = 3
+                    continue
                 }
-                if currentChapterIndex == chapter, !text.isEmpty {
+                inlineCache[key] = text
+                if currentChapterIndex == chapter {
                     inlineNotes.removeAll { $0.idx == paragraph.idx }
                     inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
                 }
@@ -1294,8 +1301,8 @@ struct ReadingView: View {
                 guard let text = try? await resolution.service.inlineNote(
                     for: paragraph,
                     kind: .bilingual
-                ).trimmingCharacters(in: .whitespacesAndNewlines),
-                      !text.isEmpty
+                    ).trimmingCharacters(in: .whitespacesAndNewlines),
+                    InlineNoteQuality.isWorthShowing(note: text, original: paragraph)
                 else { continue }
                 store.store(
                     text,

@@ -440,24 +440,43 @@ struct NativeChapterReaderView: View {
         let body = note?.failed == true
             ? "暂不可用，稍后会自动重试。"
             : (note?.text.isEmpty == false ? note?.text ?? "" : "生成中…")
+        // 今译 reads as quiet secondary text under the original; the
+        // 朱批-voiced lenses (导读/辩难/文献) speak from an accent callout
+        // so the two registers never look alike.
+        let isQuiet = inlineMode == .bilingual
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
                 .font(.system(size: 10.5, weight: .bold))
                 .kerning(1.1)
-                .foregroundStyle(palette.accent)
+                .foregroundStyle(isQuiet ? palette.ink3 : palette.accent)
             Text(body)
                 .font(.system(size: max(13, fontSize - 2), weight: .regular, design: .serif))
                 .lineSpacing(max(3, textLineSpacing(for: max(13, fontSize - 2)) * 0.8))
                 .foregroundStyle(note == nil ? palette.ink3 : palette.ink2)
                 .fixedSize(horizontal: false, vertical: true)
+                .italic(inlineMode == .debate)
         }
         .padding(.horizontal, 13)
-        .padding(.vertical, 10)
-        .background(palette.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.vertical, isQuiet ? 4 : 10)
+        .background(
+            isQuiet ? Color.clear : palette.accentSoft,
+            in: RoundedRectangle(cornerRadius: 12)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(palette.accentSoft2, lineWidth: 1)
+                .strokeBorder(
+                    isQuiet ? Color.clear : palette.accentSoft2,
+                    lineWidth: 1
+                )
         )
+        .overlay(alignment: .leading) {
+            if isQuiet {
+                Rectangle()
+                    .fill(palette.line2)
+                    .frame(width: 2)
+                    .padding(.vertical, 2)
+            }
+        }
     }
 
     private func chapterBoundaryButton(_ direction: PageTurnDirection) -> some View {

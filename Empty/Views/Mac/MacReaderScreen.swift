@@ -472,7 +472,7 @@ struct MacReaderScreen: View {
     private var inlineModeStatusBar: some View {
         HStack(spacing: 8) {
             if inlineAIUnavailable {
-                Text("朱 · AI 暂不可用 — 在侧栏「AI 状态」配置后,\(Self.translationKind(for: readingMode) == .bilingual ? "双语对照" : inlineNoteKind.label)会随阅读逐段出现。")
+                Text("朱 · AI 暂不可用 — 在侧栏「AI 状态」配置后,\(Self.translationKind(for: readingMode) == .bilingual ? "今译" : inlineNoteKind.label)会随阅读逐段出现。")
                     .foregroundStyle(palette.accent)
             } else if !inlineInFlight.isEmpty {
                 ProgressView()
@@ -700,7 +700,7 @@ struct MacReaderScreen: View {
             MacSegmentedPills(
                 options: [
                     (.original, "原文"),
-                    (.bilingual, "双语"),
+                    (.bilingual, "今译"),
                     (.companion, "导读"),
                     (.debate, "辩难"),
                     (.sources, "文献"),
@@ -903,7 +903,7 @@ struct MacReaderScreen: View {
                     .padding(.horizontal, 24)
                     .padding(.vertical, 10)
             } else if !modeGuideText.isEmpty {
-                ZhupiCallout(title: Self.translationKind(for: readingMode) == .bilingual ? "双语对照" : inlineNoteKind.label) {
+                ZhupiCallout(title: Self.translationKind(for: readingMode) == .bilingual ? "今译" : inlineNoteKind.label) {
                     Text(modeGuideText)
                         .font(.system(size: 13.5))
                         .lineSpacing(6)
@@ -1004,7 +1004,7 @@ struct MacReaderScreen: View {
             MacSegmentedPills(
                 options: [
                     (.original, "原文"),
-                    (.bilingual, "双语"),
+                    (.bilingual, "今译"),
                     (.companion, "导读"),
                     (.debate, "辩难"),
                     (.sources, "文献"),
@@ -1409,20 +1409,23 @@ struct MacReaderScreen: View {
                         kind: inlineKind
                     )
                 }.trimmingCharacters(in: .whitespacesAndNewlines)
-                inlineCache[key] = text
-                if !text.isEmpty {
-                    TranslationStore(modelContext: modelContext).store(
-                        text,
-                        bookID: book.id,
-                        chapterIndex: chapter,
-                        kind: kind,
-                        text: paragraph.text
-                    )
-                    cacheStatsTick += 1
-                } else {
-                    inlineRetryCounts[key, default: 0] += 1
+                // Echoes (same-language "translations") and the 今译
+                // sentinel never paint — and never improve on retry.
+                guard InlineNoteQuality.isWorthShowing(note: text, original: paragraph.text) else {
+                    inlineCache[key] = ""
+                    inlineRetryCounts[key] = 3
+                    continue
                 }
-                if readingMode == mode, currentChapterIndex == chapter, !text.isEmpty {
+                inlineCache[key] = text
+                TranslationStore(modelContext: modelContext).store(
+                    text,
+                    bookID: book.id,
+                    chapterIndex: chapter,
+                    kind: kind,
+                    text: paragraph.text
+                )
+                cacheStatsTick += 1
+                if readingMode == mode, currentChapterIndex == chapter {
                     inlineNotes.removeAll { $0.idx == paragraph.idx }
                     inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
                 }
@@ -1527,8 +1530,8 @@ struct MacReaderScreen: View {
                 if let text = try? await resolution.service.inlineNote(
                     for: paragraph,
                     kind: .bilingual
-                ).trimmingCharacters(in: .whitespacesAndNewlines),
-                   !text.isEmpty {
+                    ).trimmingCharacters(in: .whitespacesAndNewlines),
+                    InlineNoteQuality.isWorthShowing(note: text, original: paragraph) {
                     store.store(
                         text,
                         bookID: bookID,

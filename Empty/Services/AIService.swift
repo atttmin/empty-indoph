@@ -52,9 +52,17 @@ nonisolated enum AIInlineNotePrompt {
     static func user(kind: AIInlineNoteKind, text: String) -> String {
         let instruction = switch kind {
         case .bilingual:
-            "Translate this paragraph into natural, literary Simplified Chinese."
+            // 今译 lens: language-adaptive. Foreign text translates;
+            // classical/literary Chinese modernizes; text that is ALREADY
+            // plain modern Chinese has nothing to translate — say so with
+            // a sentinel the client suppresses (a Chinese book must never
+            // show its own text duplicated as a "translation").
+            "今译: If the paragraph is not Chinese, translate it into natural, literary Simplified Chinese. If it is classical/literary Chinese (文言、半文言、旧白话), render it in plain modern Chinese. If it is ALREADY plain modern Chinese, output exactly 「原文即白话」 and nothing else."
         case .companion:
-            "Retell this paragraph in clear modern Simplified Chinese. Preserve the key imagery and tone. Use no more than three sentences."
+            // 导读 is a margin note, NOT a retell — the chapter overview
+            // already summarizes content. Point at what the paragraph is
+            // DOING and what deserves a pause.
+            "你是页边的朱批（导读）。不要复述或翻译这段话——读者看得见原文。指出:这一段在做什么（立论/转折/铺垫/反驳/抒情），以及一个值得读者停下来想的点。最多两句，口吻克制，像一位老编辑的旁注。"
         case .debate:
             "You are a Socratic sparring partner (辩难). Pose one or two sharp counter-questions in Simplified Chinese that challenge this paragraph's claim or assumption. Ask only — never answer them, never explain, never take a side."
         case .sources:
@@ -67,6 +75,42 @@ nonisolated enum AIInlineNotePrompt {
         Text:
         \(text)
         """
+    }
+}
+
+/// Client-side quality gate for inline notes: a note that just echoes
+/// the paragraph (the same-language "translation" failure mode) or hits
+/// the 今译 sentinel must not paint.
+nonisolated enum InlineNoteQuality {
+    static let nothingToTranslate = "原文即白话"
+
+    static func isWorthShowing(note: String, original: String) -> Bool {
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.contains(nothingToTranslate) { return false }
+        return !isEcho(note: trimmed, original: original)
+    }
+
+    /// True when the note is essentially the original text again.
+    static func isEcho(note: String, original: String) -> Bool {
+        let a = normalize(note)
+        let b = normalize(original)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        if a == b || b.contains(a) || a.contains(b) { return true }
+        // Character-overlap ratio for near-identical restatements.
+        let setA = Set(a)
+        let setB = Set(b)
+        let overlap = Double(setA.intersection(setB).count)
+            / Double(max(min(setA.count, setB.count), 1))
+        let lengthRatio = Double(min(a.count, b.count)) / Double(max(a.count, b.count))
+        return overlap > 0.9 && lengthRatio > 0.7
+    }
+
+    private static func normalize(_ text: String) -> String {
+        String(text.unicodeScalars.filter {
+            !CharacterSet.whitespacesAndNewlines.contains($0)
+                && !CharacterSet.punctuationCharacters.contains($0)
+        })
     }
 }
 
