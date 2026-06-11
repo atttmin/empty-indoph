@@ -82,6 +82,7 @@ struct MacReaderScreen: View {
     @State private var chromeHidden = false
     @State private var chromeTimer: Task<Void, Never>?
     @State private var bookmarkedHere = false
+    @State private var activityMeter = ReadingActivityMeter()
     /// Per-chapter pre-translation activity for the TOC chips.
     @State private var pretransProgress: [Int: MacChapterTransStatus] = [:]
     /// Translated chapter titles for the bilingual TOC (kind `.title`).
@@ -1635,6 +1636,9 @@ struct MacReaderScreen: View {
             in: plainText
         )
         currentUTF16Offset = min(offset, plainText.utf16.count)
+        // Position reports only arrive on real scroll/page activity —
+        // exactly what the 统计 spec counts as reading time.
+        activityMeter.ping()
     }
 
     private func loadBook() {
@@ -1797,6 +1801,7 @@ struct MacReaderScreen: View {
         if let session {
             session.endedAt = Date()
             session.endPosition = position
+            session.activeSeconds += activityMeter.drain()
         }
         try? modelContext.save()
     }

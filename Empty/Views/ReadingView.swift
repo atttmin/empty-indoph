@@ -154,6 +154,7 @@ struct ReadingView: View {
     @State private var thoughtLinkExpanded = false
     @State private var thoughtLinkSaved = false
     @State private var chapterPageInfo: (page: Int, count: Int)?
+    @State private var activityMeter = ReadingActivityMeter()
     @StateObject private var aloud = ReadingAloud()
 
     init(
@@ -1231,6 +1232,9 @@ struct ReadingView: View {
             in: plainText
         )
         currentUTF16Offset = min(offset, plainText.utf16.count)
+        // Position reports only arrive on real scroll/page activity —
+        // exactly what the 统计 spec counts as reading time.
+        activityMeter.ping()
     }
 
     private func loadBook() {
@@ -1307,6 +1311,7 @@ struct ReadingView: View {
         if let session {
             session.endedAt = Date()
             session.endPosition = position
+            session.activeSeconds += activityMeter.drain()
         }
         // Best effort on the way out; SwiftData autosave covers the rest.
         try? modelContext.save()

@@ -19,6 +19,10 @@ final class ReadingSession {
     var startedAt: Date = Date()
     var endedAt: Date?
 
+    /// Metered *active* reading seconds (scroll/page activity with idle
+    /// gaps dropped). 0 on legacy rows — stats fall back to wall-clock.
+    var activeSeconds: Double = 0
+
     // Flattened `ReadingPosition`s for where the sitting started and ended.
     var startChapterIndex: Int = 0
     var startUTF16Offset: Int = 0

@@ -27,6 +27,7 @@ struct IOSLibraryScreen: View {
     @State private var isImporterPresented = false
     @State private var isDiagnosticsPresented = false
     @State private var isSearching = false
+    @State private var showStats = false
     @State private var searchText = ""
     @State private var errorMessage: String?
     /// "yyyy-MM-dd" of the day the reader skipped the nudge.
@@ -139,6 +140,19 @@ struct IOSLibraryScreen: View {
                     .foregroundStyle(palette.ink3)
             }
             Spacer()
+            Button {
+                showStats = true
+            } label: {
+                Image(systemName: "chart.bar")
+                    .font(.system(size: 13))
+                    .foregroundStyle(palette.ink3)
+                    .frame(width: 36, height: 36)
+                    .background(palette.accentSoft.opacity(0.6), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showStats) {
+                ReadingStatsView()
+            }
             Button {
                 isDiagnosticsPresented = true
             } label: {

@@ -21,6 +21,7 @@ struct MacLibraryScreen: View {
     @State private var isImporterPresented = false
     @State private var errorMessage: String?
     @State private var searchText = ""
+    @State private var showStats = false
     @Query(sort: \Highlight.createdAt, order: .reverse) private var highlights: [Highlight]
 
 
@@ -122,6 +123,17 @@ struct MacLibraryScreen: View {
                 placeholder: "搜索书名、高亮或问过的问题…"
             )
             Button {
+                showStats = true
+            } label: {
+                Text("统计")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(palette.ink2)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            Button {
                 isImporterPresented = true
             } label: {
                 Text("+ 导入书籍")
@@ -132,6 +144,9 @@ struct MacLibraryScreen: View {
                     .background(palette.ink, in: Capsule())
             }
             .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $showStats) {
+            ReadingStatsView()
         }
     }
 
