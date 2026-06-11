@@ -253,6 +253,7 @@ private struct ContinueReadingHero: View {
                             .padding(.horizontal, 22)
                             .padding(.vertical, 10)
                             .background(palette.accent, in: Capsule())
+                            .accessibilityIdentifier("continueReadingButton")
                     }
                     .buttonStyle(.plain)
 

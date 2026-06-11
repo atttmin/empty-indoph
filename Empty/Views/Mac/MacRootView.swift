@@ -20,6 +20,7 @@ enum MacScreen: Hashable {
 }
 
 struct MacRootView: View {
+    @Environment(\.modelContext) private var modelContext
     @AppStorage("emptyDarkTheme") private var isDarkTheme = false
     @State private var screen: MacScreen = .library
     @State private var openBook: Book?
@@ -50,6 +51,17 @@ struct MacRootView: View {
         .preferredColorScheme(isDarkTheme ? .dark : .light)
         .frame(minWidth: 1080, minHeight: 700)
         .animation(.easeInOut(duration: 0.2), value: isDarkTheme)
+        .onAppear(perform: applyLaunchOverrides)
+    }
+
+    /// `-OpenReader` opens the most recently read book (screenshot automation).
+    private func applyLaunchOverrides() {
+        guard ProcessInfo.processInfo.arguments.contains("-OpenReader") else { return }
+        let descriptor = FetchDescriptor<Book>(
+            sortBy: [SortDescriptor(\Book.lastOpenedAt, order: .reverse)]
+        )
+        guard let book = try? modelContext.fetch(descriptor).first else { return }
+        open(book)
     }
 
     @ViewBuilder

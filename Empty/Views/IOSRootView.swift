@@ -20,6 +20,7 @@ enum IOSTab: Hashable {
 
 struct IOSRootView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \Book.lastOpenedAt, order: .reverse) private var books: [Book]
 
     @State private var tab: IOSTab = .library
@@ -65,6 +66,21 @@ struct IOSRootView: View {
                     ?? ReadingPosition(chapterIndex: 0, utf16Offset: 0)
             )
             .environment(\.emptyPalette, palette)
+        }
+        .task { applyLaunchOverrides() }
+    }
+
+    private func applyLaunchOverrides() {
+        try? ScreenshotSeeder.seedDemoBookIfNeeded(modelContext: modelContext)
+        let args = ProcessInfo.processInfo.arguments
+        let seeded = try? modelContext.fetch(
+            FetchDescriptor<Book>(sortBy: [SortDescriptor(\.lastOpenedAt, order: .reverse)])
+        ).first
+        if args.contains("-OpenReader"), let book = seeded {
+            openBook = book
+            tab = .reader
+        } else if args.contains("-OpenTabReader") {
+            tab = .reader
         }
     }
 
