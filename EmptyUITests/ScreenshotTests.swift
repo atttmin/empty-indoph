@@ -2,18 +2,25 @@
 //  ScreenshotTests.swift
 //  EmptyUITests
 //
-//  Captures real product screenshots into docs/screenshots for README / website.
+//  Captures real product screenshots. Defaults to a temp folder because the
+//  UI-test runner is sandboxed on macOS; override with SCREENSHOT_OUTPUT_DIR.
 //
 
 import XCTest
 
 final class ScreenshotTests: XCTestCase {
-    private let outputDirectory = "/Users/davirian/dev/Empty/docs/screenshots"
+    private let outputDirectory: URL = {
+        if let override = ProcessInfo.processInfo.environment["SCREENSHOT_OUTPUT_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.temporaryDirectory
+            .appending(path: "EmptyScreenshots", directoryHint: .isDirectory)
+    }()
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         try FileManager.default.createDirectory(
-            atPath: outputDirectory,
+            at: outputDirectory,
             withIntermediateDirectories: true
         )
     }
@@ -39,7 +46,7 @@ final class ScreenshotTests: XCTestCase {
         app.launchArguments = ["-ScreenshotSeed", "-OpenReader"]
         app.launch()
 
-        let readerChrome = app.staticTexts["‹ 书库"]
+        let readerChrome = app.buttons["‹ 书库"]
         XCTAssertTrue(readerChrome.waitForExistence(timeout: 12))
         XCTAssertTrue(app.staticTexts["思维之书"].firstMatch.waitForExistence(timeout: 4))
 
@@ -54,8 +61,8 @@ final class ScreenshotTests: XCTestCase {
         app.launchArguments = ["-ScreenshotSeed"]
         app.launch()
 
-        let libraryTab = app.tabBars.buttons["书库"]
-        XCTAssertTrue(libraryTab.waitForExistence(timeout: 8))
+        let libraryTitle = app.staticTexts["书库"]
+        XCTAssertTrue(libraryTitle.waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["思维之书"].firstMatch.waitForExistence(timeout: 8))
 
         sleep(1)
@@ -65,10 +72,14 @@ final class ScreenshotTests: XCTestCase {
     @MainActor
     func testCaptureIOSReading() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-ScreenshotSeed", "-OpenReader"]
+        app.launchArguments = ["-ScreenshotSeed"]
         app.launch()
 
-        let readerBack = app.buttons["‹ 书库"]
+        let seededBook = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "思维之书")).firstMatch
+        XCTAssertTrue(seededBook.waitForExistence(timeout: 12))
+        seededBook.tap()
+
+        let readerBack = app.buttons["‹"]
         XCTAssertTrue(readerBack.waitForExistence(timeout: 12))
 
         sleep(2)
@@ -78,7 +89,12 @@ final class ScreenshotTests: XCTestCase {
 
     private func saveScreenshot(named name: String, from app: XCUIApplication) throws {
         let screenshot = app.screenshot()
-        let path = "\(outputDirectory)/\(name).png"
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let path = outputDirectory.appending(path: "\(name).png")
         #if os(macOS)
         guard let tiff = screenshot.image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
@@ -86,14 +102,14 @@ final class ScreenshotTests: XCTestCase {
             XCTFail("Could not encode screenshot \(name)")
             return
         }
-        try data.write(to: URL(fileURLWithPath: path))
+        try data.write(to: path)
         #else
         let image = screenshot.image
         guard let data = image.pngData() else {
             XCTFail("Could not encode screenshot \(name)")
             return
         }
-        try data.write(to: URL(fileURLWithPath: path))
+        try data.write(to: path)
         #endif
     }
 }
