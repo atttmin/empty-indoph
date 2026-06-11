@@ -74,6 +74,47 @@ struct CompanionModelTests {
         #expect(resolved.body.contains("长期兴趣"))
         #expect(resolved.tags == ["减法", "本质"])
     }
+
+    @Test func autoThemeDraftReturnsSignatureAndDraft() async throws {
+        let messages: [CompanionModel.Message] = [
+            .init(role: .ai, text: "减法是一种纪律。", question: "为什么一直谈减法？"),
+            .init(role: .ai, text: "因为作者要把注意力留给本质。", question: "减法最后想得到什么？")
+        ]
+
+        let proposal = try await CompanionModel.autoThemeDraft(
+            from: messages,
+            lastSignature: nil,
+            targetLanguage: "Simplified Chinese",
+            service: ScriptedThemeService(
+                response: """
+                Title: 减法与本质
+                Summary: 这些追问都在逼近一个长期兴趣：如何删去噪音，只保留真正重要的东西。
+                Tags: 减法, 本质
+                """
+            )
+        )
+
+        let resolved = try #require(proposal)
+        #expect(!resolved.signature.isEmpty)
+        #expect(resolved.draft.title == "减法与本质")
+    }
+
+    @Test func autoThemeDraftSkipsRepeatedSignature() async throws {
+        let messages: [CompanionModel.Message] = [
+            .init(role: .ai, text: "减法是一种纪律。", question: "为什么一直谈减法？"),
+            .init(role: .ai, text: "因为作者要把注意力留给本质。", question: "减法最后想得到什么？")
+        ]
+        let signature = try #require(CompanionModel.themeProposalSignature(from: messages))
+
+        let proposal = try await CompanionModel.autoThemeDraft(
+            from: messages,
+            lastSignature: signature,
+            targetLanguage: "Simplified Chinese",
+            service: ScriptedThemeService(response: "unused")
+        )
+
+        #expect(proposal == nil)
+    }
 }
 
 private struct ScriptedThemeService: AIService {

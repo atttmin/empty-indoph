@@ -118,6 +118,7 @@ final class CompanionModel {
                         steps: reply.steps,
                         actions: reply.actions
                     ))
+                    await maybeAutoProposeTheme(for: book, service: resolution.service)
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
@@ -144,7 +145,6 @@ final class CompanionModel {
     func proposeTheme(for book: Book) {
         guard canProposeTheme else { return }
         thinking = true
-        let signature = Self.themeProposalSignature(from: messages)
 
         Task {
             defer { thinking = false }
@@ -153,8 +153,9 @@ final class CompanionModel {
                 let targetLanguage = LanguageSettings.promptName(
                     for: LanguageSettings.effective(for: book.id).resolvedChatTarget()
                 )
-                guard let draft = try await Self.makeThemeDraft(
+                guard let proposal = try await Self.autoThemeDraft(
                     from: messages,
+                    lastSignature: nil,
                     targetLanguage: targetLanguage,
                     service: resolution.service
                 ) else {
@@ -164,22 +165,11 @@ final class CompanionModel {
                     ))
                     return
                 }
-                lastThemeProposalSignature = signature
-                messages.append(Message(
-                    role: .ai,
-                    text: draft.body,
-                    steps: ["聚合本轮问答", "提炼主题(待确认)"],
-                    actions: [
-                        CompanionAction(
-                            title: "记住主题「\(draft.title)」",
-                            kind: .saveMemory(
-                                title: draft.title,
-                                body: draft.body,
-                                tags: draft.tags
-                            )
-                        )
-                    ]
-                ))
+                appendThemeProposal(
+                    signature: proposal.signature,
+                    draft: proposal.draft,
+                    automatic: false
+                )
             } catch {
                 messages.append(Message(
                     role: .ai,
@@ -187,6 +177,53 @@ final class CompanionModel {
                 ))
             }
         }
+    }
+
+
+    private func maybeAutoProposeTheme(
+        for book: Book,
+        service: any AIService
+    ) async {
+        let targetLanguage = LanguageSettings.promptName(
+            for: LanguageSettings.effective(for: book.id).resolvedChatTarget()
+        )
+        guard let proposal = try? await Self.autoThemeDraft(
+            from: messages,
+            lastSignature: lastThemeProposalSignature,
+            targetLanguage: targetLanguage,
+            service: service
+        ) else { return }
+        appendThemeProposal(
+            signature: proposal.signature,
+            draft: proposal.draft,
+            automatic: true
+        )
+    }
+
+    private func appendThemeProposal(
+        signature: String,
+        draft: (title: String, body: String, tags: [String]),
+        automatic: Bool
+    ) {
+        lastThemeProposalSignature = signature
+        let messageText = automatic
+            ? "我顺手把这轮反复出现的问题提成了一个长期主题。想让它进入读者记忆,就点一下确认。\n\n\(draft.body)"
+            : draft.body
+        messages.append(Message(
+            role: .ai,
+            text: messageText,
+            steps: ["聚合本轮问答", "提炼主题(待确认)"],
+            actions: [
+                CompanionAction(
+                    title: "记住主题「\(draft.title)」",
+                    kind: .saveMemory(
+                        title: draft.title,
+                        body: draft.body,
+                        tags: draft.tags
+                    )
+                )
+            ]
+        ))
     }
 
     static func hasReadableContext(
@@ -245,6 +282,22 @@ final class CompanionModel {
             groundedIn: passages
         )
         return parseThemeDraft(answer.text)
+    }
+
+    static func autoThemeDraft(
+        from messages: [Message],
+        lastSignature: String?,
+        targetLanguage: String,
+        service: any AIService
+    ) async throws -> (signature: String, draft: (title: String, body: String, tags: [String]))? {
+        guard let signature = themeProposalSignature(from: messages),
+              signature != lastSignature,
+              let draft = try await makeThemeDraft(
+                from: messages,
+                targetLanguage: targetLanguage,
+                service: service
+              ) else { return nil }
+        return (signature, draft)
     }
 
     static func parseThemeDraft(_ text: String) -> (title: String, body: String, tags: [String]) {
@@ -312,6 +365,7 @@ final class CompanionModel {
             source: citedChunk.flatMap(Self.sourceTitle(for:)),
             question: question
         ))
+        await maybeAutoProposeTheme(for: book, service: service)
     }
 
     /// Executes one reader-confirmed agent action and marks it done on the

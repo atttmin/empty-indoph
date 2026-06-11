@@ -98,6 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   echoes at once instead of only the single best match; iPhone keeps the
   first quick callout while reader surfaces show the full stack.
 
+- Companion Q&A now auto-suggests a `theme` memory after repeated answered
+  turns; the manual “提炼本轮主题” button remains for explicit control.
+
 - 语言设置 (per the 语言设置原型 design): a global目标语言 (简中/繁中/
   English/日本語) that 译文、释义、朱的回答 all follow, with 作用范围 rows
   to fix 释义 or 朱的回答 to a different language. 源语言 defaults to
