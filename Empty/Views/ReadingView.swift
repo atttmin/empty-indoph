@@ -59,8 +59,15 @@ nonisolated struct ReaderParagraph: Equatable {
 /// Reading position and sessions persist through the SwiftData `Book`.
 struct ReadingView: View {
     let book: Book
+    /// Tab-hosted on iOS: back returns to 书库 instead of popping.
+    var onExit: (() -> Void)?
+    /// 追问 hand-off to the 朱 companion sheet (question, live position).
+    var onAskCompanion: ((String, ReadingPosition) -> Void)?
+    /// Mirrors the tap-to-hide chrome so the shell can hide its tab bar.
+    var onControlsChange: ((Bool) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.emptyPalette) private var palette
     @Environment(\.modelContext) private var modelContext
 
     @State private var epubBook: EPUBBook?
@@ -76,7 +83,6 @@ struct ReadingView: View {
     @State private var showChapterList = false
     @State private var showSettings = false
     @State private var showRecap = false
-    @State private var showAsk = false
     @State private var recapCache: RecapCache?
     @State private var pendingSelection: ReaderSelection?
     @State private var chapterHighlights: [HighlightPaint] = []
@@ -84,11 +90,30 @@ struct ReadingView: View {
     @State private var saveErrorMessage: String?
     @State private var showControls = true
     @State private var fontSize: Double = 18
-    @State private var isDarkMode = false
     @State private var lineSpacing: Double = 1.6
+    @State private var isBilingual = false
+    @State private var inlineNotes: [InlineNotePaint] = []
+    @State private var inlineCache: [Int: String] = [:]
+    @State private var inlineInFlight: Set<Int> = []
+    @State private var marginNote: String?
+    @State private var marginSubject: String?
+    @State private var isSelectionWorking = false
+    @State private var thoughtLink: ThoughtLink?
+    @State private var thoughtLinkExpanded = false
+    @State private var thoughtLinkSaved = false
+    @State private var chapterPageInfo: (page: Int, count: Int)?
+    @StateObject private var aloud = ReadingAloud()
 
-    init(book: Book) {
+    init(
+        book: Book,
+        onExit: (() -> Void)? = nil,
+        onAskCompanion: ((String, ReadingPosition) -> Void)? = nil,
+        onControlsChange: ((Bool) -> Void)? = nil
+    ) {
         self.book = book
+        self.onExit = onExit
+        self.onAskCompanion = onAskCompanion
+        self.onControlsChange = onControlsChange
         _currentChapterIndex = State(initialValue: book.position.chapterIndex)
         _currentUTF16Offset = State(initialValue: book.position.utf16Offset)
     }
@@ -105,21 +130,23 @@ struct ReadingView: View {
             backgroundColor.ignoresSafeArea()
 
             if isLoading {
-                ProgressView("Loading book...")
-                    .foregroundStyle(.secondary)
+                ProgressView("正在打开…")
+                    .foregroundStyle(palette.ink3)
             } else if let error = loadError {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.largeTitle)
                         .foregroundStyle(.orange)
-                    Text("Could not load book")
-                        .font(.headline)
+                    Text("无法打开这本书")
+                        .font(.system(size: 15, weight: .bold, design: .serif))
+                        .foregroundStyle(palette.ink)
                     Text(error)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(palette.ink3)
                         .multilineTextAlignment(.center)
-                    Button("Dismiss") { dismiss() }
+                    Button("返回") { exitReader() }
                         .buttonStyle(.borderedProminent)
+                        .tint(palette.accent)
                 }
                 .padding()
             } else if let epubBook {
@@ -128,9 +155,14 @@ struct ReadingView: View {
                 pdfReaderContent
             }
         }
-        .preferredColorScheme(isDarkMode ? .dark : nil)
         .onAppear(perform: loadBook)
-        .onDisappear(perform: saveProgress)
+        .onDisappear {
+            aloud.stop()
+            saveProgress()
+        }
+        .onChange(of: showControls) { _, visible in
+            onControlsChange?(visible)
+        }
         #if !os(macOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
@@ -139,12 +171,25 @@ struct ReadingView: View {
         #endif
     }
 
+    private func exitReader() {
+        saveProgress()
+        if let onExit {
+            onExit()
+        } else {
+            dismiss()
+        }
+    }
+
     @ViewBuilder
     private func readerContent(_ book: EPUBBook) -> some View {
         VStack(spacing: 0) {
             if showControls {
-                topBar(book)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                readerTopBar(
+                    title: book.metadata.title,
+                    subtitle: chapterSubtitle(sectionLabel: "章"),
+                    showsBilingual: true
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
 
             ZStack(alignment: .bottom) {
@@ -152,34 +197,27 @@ struct ReadingView: View {
                     chapter: book.chapters[currentChapterIndex],
                     basePath: book.basePath,
                     fontSize: fontSize,
-                    isDarkMode: isDarkMode,
+                    isDarkMode: palette.isDark,
                     lineSpacing: lineSpacing,
                     landing: chapterLanding,
                     resumeUTF16Offset: resumeUTF16Offset,
                     chapterPlainText: currentChapterPlainText(),
                     highlights: chapterHighlights,
+                    inlineMode: isBilingual ? .bilingual : .none,
+                    inlineNotes: inlineNotes,
                     onTap: { withAnimation(.easeInOut(duration: 0.25)) { showControls.toggle() } },
                     onChapterBoundary: { direction in
                         crossChapterBoundary(direction, chapterCount: book.chapters.count)
                     },
-                    onSelectionChange: { pendingSelection = $0 },
-                    onPositionChange: { updateUTF16Offset(domPrefix: $0) }
+                    onSelectionChange: { handleSelectionChange($0) },
+                    onPositionChange: { updateUTF16Offset(domPrefix: $0) },
+                    onVisibleParagraphs: { handleVisibleParagraphs($0) },
+                    onPageInfo: { page, count in
+                        chapterPageInfo = (page: page, count: count)
+                    }
                 )
 
-                if pendingSelection != nil {
-                    Button {
-                        saveHighlight()
-                    } label: {
-                        Label("Highlight", systemImage: "highlighter")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.bottom, 28)
-                }
-            }
-
-            if showControls {
-                bottomBar(book)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                readerOverlay
             }
         }
         .animation(.easeInOut(duration: 0.25), value: showControls)
@@ -201,8 +239,7 @@ struct ReadingView: View {
         .sheet(isPresented: $showSettings) {
             ReadingSettingsView(
                 fontSize: $fontSize,
-                lineSpacing: $lineSpacing,
-                isDarkMode: $isDarkMode
+                lineSpacing: $lineSpacing
             )
             #if os(iOS)
             .presentationDetents([.medium])
@@ -220,15 +257,6 @@ struct ReadingView: View {
             .frame(minWidth: 440, minHeight: 480)
             #endif
         }
-        .sheet(isPresented: $showAsk) {
-            AskBookView(
-                book: self.book,
-                position: currentReadingPosition
-            )
-            #if os(macOS)
-            .frame(minWidth: 440, minHeight: 480)
-            #endif
-        }
         .sheet(isPresented: $showHighlights) {
             HighlightsListView(book: self.book) { chapterIndex in
                 currentChapterIndex = chapterIndex
@@ -240,8 +268,13 @@ struct ReadingView: View {
             #endif
         }
         .onChange(of: currentChapterIndex) { _, _ in
-            pendingSelection = nil
+            resetChapterArtifacts()
             refreshChapterHighlights()
+        }
+        .onChange(of: isBilingual) { _, _ in
+            // The chapter page clears and re-requests notes; cached
+            // translations rejoin instantly.
+            inlineNotes = []
         }
         .onChange(of: showHighlights) { _, isShowing in
             if !isShowing { refreshChapterHighlights() }
@@ -264,8 +297,12 @@ struct ReadingView: View {
         if let documentURL = pdfDocumentURL {
             VStack(spacing: 0) {
                 if showControls {
-                    pdfTopBar
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                    readerTopBar(
+                        title: book.title,
+                        subtitle: chapterSubtitle(sectionLabel: "页"),
+                        showsBilingual: false
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
                 ZStack(alignment: .bottom) {
@@ -274,26 +311,13 @@ struct ReadingView: View {
                         pageIndex: $currentChapterIndex,
                         highlights: chapterHighlights,
                         onPageChange: syncPageProgress,
-                        onSelectionChange: { pendingSelection = $0 }
+                        onSelectionChange: { handleSelectionChange($0) }
                     )
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.25)) { showControls.toggle() }
                     }
 
-                    if pendingSelection != nil {
-                        Button {
-                            saveHighlight()
-                        } label: {
-                            Label("Highlight", systemImage: "highlighter")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.bottom, 28)
-                    }
-                }
-
-                if showControls {
-                    pdfBottomBar
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    readerOverlay
                 }
             }
             .animation(.easeInOut(duration: 0.25), value: showControls)
@@ -321,15 +345,6 @@ struct ReadingView: View {
                 .frame(minWidth: 440, minHeight: 480)
                 #endif
             }
-            .sheet(isPresented: $showAsk) {
-                AskBookView(
-                    book: self.book,
-                    position: currentReadingPosition
-                )
-                #if os(macOS)
-                .frame(minWidth: 440, minHeight: 480)
-                #endif
-            }
             .sheet(isPresented: $showHighlights) {
                 HighlightsListView(book: self.book) { chapterIndex in
                     currentChapterIndex = chapterIndex
@@ -340,106 +355,13 @@ struct ReadingView: View {
                 #endif
             }
             .onChange(of: currentChapterIndex) { _, newIndex in
-                pendingSelection = nil
+                resetChapterArtifacts()
                 syncPageProgress(at: newIndex)
             }
             .onChange(of: showHighlights) { _, isShowing in
                 if !isShowing { refreshChapterHighlights() }
             }
         }
-    }
-
-    private var pdfTopBar: some View {
-        HStack {
-            Button {
-                saveProgress()
-                dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.primary)
-            }
-
-            Spacer()
-
-            VStack(spacing: 1) {
-                Text(book.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Text(currentSectionTitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            Button { showHighlights = true } label: {
-                Image(systemName: "bookmark")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
-            }
-
-            Button { showAsk = true } label: {
-                Image(systemName: "questionmark.bubble")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
-            }
-
-            Button { showRecap = true } label: {
-                Image(systemName: "sparkles")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
-    }
-
-    private var pdfBottomBar: some View {
-        HStack(spacing: 24) {
-            Button { showChapterList = true } label: {
-                Image(systemName: "list.bullet")
-                    .font(.body.weight(.medium))
-            }
-
-            Spacer()
-
-            Button {
-                if currentChapterIndex > 0 {
-                    currentChapterIndex -= 1
-                }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.body.weight(.semibold))
-            }
-            .disabled(currentChapterIndex <= 0)
-
-            Text("\(currentChapterIndex + 1) / \(sectionCount)")
-                .font(.caption.weight(.medium).monospacedDigit())
-                .foregroundStyle(.secondary)
-
-            Button {
-                if currentChapterIndex < sectionCount - 1 {
-                    currentChapterIndex += 1
-                }
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.body.weight(.semibold))
-            }
-            .disabled(currentChapterIndex >= sectionCount - 1)
-
-            Spacer()
-
-            let progress = Double(currentChapterIndex + 1) / Double(max(sectionCount, 1))
-            Text("\(Int(progress * 100))%")
-                .font(.caption.weight(.medium).monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
     }
 
     private var currentSectionTitle: String {
@@ -459,121 +381,471 @@ struct ReadingView: View {
         refreshChapterHighlights()
     }
 
-    private func topBar(_ book: EPUBBook) -> some View {
-        HStack {
-            Button {
-                saveProgress()
-                dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.primary)
-            }
+    // MARK: 朱批 chrome (02 iOS prototype)
 
-            Spacer()
+    /// Compact top bar: ‹ back, centered title + position line, the 「译」
+    /// bilingual toggle (EPUB), the aloud toggle, and an overflow menu for
+    /// 目录 / 高亮 / 前情回顾 / 阅读设置.
+    private func readerTopBar(
+        title: String,
+        subtitle: String,
+        showsBilingual: Bool
+    ) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                exitReader()
+            } label: {
+                Text("‹")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(palette.accent)
+                    .padding(.horizontal, 6)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
 
             VStack(spacing: 1) {
-                Text(book.metadata.title)
-                    .font(.subheadline.weight(.semibold))
+                Text(title)
+                    .font(.system(size: 14, weight: .bold, design: .serif))
+                    .foregroundStyle(palette.ink)
                     .lineLimit(1)
-                Text(book.chapters[currentChapterIndex].title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Text(subtitle)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(palette.ink3)
                     .lineLimit(1)
             }
 
-            Spacer()
+            Spacer(minLength: 0)
 
-            Button {
-                showHighlights = true
-            } label: {
-                Image(systemName: "bookmark")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
+            if showsBilingual {
+                Button {
+                    isBilingual.toggle()
+                } label: {
+                    Text("译")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(isBilingual ? palette.onAccent : palette.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(isBilingual ? palette.accent : .clear, in: Capsule())
+                        .overlay(
+                            Capsule().strokeBorder(
+                                isBilingual ? palette.accent : palette.accentSoft2,
+                                lineWidth: 1
+                            )
+                        )
+                }
+                .buttonStyle(.plain)
             }
 
             Button {
-                showAsk = true
+                toggleAloud()
             } label: {
-                Image(systemName: "questionmark.bubble")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
+                Text(aloud.isSpeaking ? "❚❚" : "▷ 朗读")
+                    .font(.system(size: 12))
+                    .foregroundStyle(aloud.isSpeaking ? palette.accent : palette.ink3)
+                    .padding(.horizontal, 4)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
-            Button {
-                showRecap = true
+            Menu {
+                Button("目录", systemImage: "list.bullet") { showChapterList = true }
+                Button("高亮", systemImage: "highlighter") { showHighlights = true }
+                Button("前情回顾", systemImage: "sparkles") { showRecap = true }
+                Button("阅读设置", systemImage: "textformat.size") { showSettings = true }
             } label: {
-                Image(systemName: "sparkles")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
+                Text("⋯")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(palette.ink3)
+                    .padding(.horizontal, 4)
+                    .contentShape(Rectangle())
             }
-
-            Button {
-                showSettings = true
-            } label: {
-                Image(systemName: "textformat.size")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
-            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 18)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
     }
 
-    private func bottomBar(_ book: EPUBBook) -> some View {
-        HStack(spacing: 24) {
-            Button {
-                showChapterList = true
-            } label: {
-                Image(systemName: "list.bullet")
-                    .font(.body.weight(.medium))
-            }
-
-            Spacer()
-
-            Button {
-                if currentChapterIndex > 0 {
-                    currentChapterIndex -= 1
-                    currentUTF16Offset = 0
-                    chapterLanding = .start
-                }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.body.weight(.semibold))
-            }
-            .disabled(currentChapterIndex <= 0)
-
-            Text("\(currentChapterIndex + 1) / \(book.chapters.count)")
-                .font(.caption.weight(.medium).monospacedDigit())
-                .foregroundStyle(.secondary)
-
-            Button {
-                if currentChapterIndex < book.chapters.count - 1 {
-                    currentChapterIndex += 1
-                    currentUTF16Offset = 0
-                    chapterLanding = .start
-                }
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.body.weight(.semibold))
-            }
-            .disabled(currentChapterIndex >= book.chapters.count - 1)
-
-            Spacer()
-
-            let progress = Double(currentChapterIndex + 1) / Double(max(book.chapters.count, 1))
-            Text("\(Int(progress * 100))%")
-                .font(.caption.weight(.medium).monospacedDigit())
-                .foregroundStyle(.secondary)
+    /// "第 N/M 章 · X%[ · 剩 Y 页]" — the prototype's position line.
+    private func chapterSubtitle(sectionLabel: String) -> String {
+        let chapterCount = Double(max(sectionCount, 1))
+        let chapterLength = Double(currentChapterPlainText()?.utf16.count ?? 1)
+        let intraChapter = chapterLength > 0
+            ? Double(currentUTF16Offset) / chapterLength
+            : 0
+        let progress = min(1, (Double(currentChapterIndex) + intraChapter) / chapterCount)
+        var parts = [
+            "第 \(currentChapterIndex + 1)/\(sectionCount) \(sectionLabel)",
+            "\(Int(progress * 100))%",
+        ]
+        if let info = chapterPageInfo, info.count > 1 {
+            parts.append("剩 \(max(info.count - info.page - 1, 0)) 页")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
+        return parts.joined(separator: " · ")
+    }
+
+    /// Floating layers over the reading surface: margin note, thought
+    /// link, selection actions, and the aloud bar. Shared by EPUB and PDF.
+    private var readerOverlay: some View {
+        VStack(spacing: 10) {
+            if let marginNote {
+                ZhupiCallout(title: "朱批 · 划词解释") {
+                    Text(marginNote)
+                        .font(.system(size: 12.5))
+                        .lineSpacing(5)
+                        .foregroundStyle(palette.ink2)
+                    Button("继续追问 ↩") {
+                        askCompanion(about: marginSubject ?? marginNote)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(palette.accent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .overlay(Capsule().strokeBorder(palette.accent, lineWidth: 1))
+                    .padding(.top, 8)
+                }
+                .padding(.horizontal, 18)
+            }
+
+            if let thoughtLink {
+                thoughtLinkCard(thoughtLink)
+                    .padding(.horizontal, 18)
+            }
+
+            if pendingSelection != nil {
+                selectionBar
+            }
+
+            if aloud.isSpeaking || !aloud.currentSnippet.isEmpty {
+                aloudBar
+            }
+        }
+        .padding(.bottom, 76)
+    }
+
+    /// 解释 / 翻译 / 追问 / 高亮 on the prototype's dark pill.
+    private var selectionBar: some View {
+        HStack(spacing: 2) {
+            selectionButton("解释") { runSelectionAction(.explain) }
+            selectionButton("翻译") { runSelectionAction(.translate) }
+            Button {
+                if let selection = pendingSelection {
+                    askCompanion(about: selection.text)
+                }
+            } label: {
+                Text("追问 ↩")
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundStyle(palette.onAccent)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(palette.accent, in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            selectionButton("高亮") { saveHighlight() }
+            if isSelectionWorking {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(.horizontal, 6)
+            }
+        }
+        .padding(5)
+        .background(palette.ink, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.3), radius: 14, y: 7)
+    }
+
+    private func selectionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12.5))
+                .foregroundStyle(palette.window)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// ⟲ 思维链接 chip and the vertical cross-book card.
+    private func thoughtLinkCard(_ link: ThoughtLink) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                thoughtLinkExpanded.toggle()
+            } label: {
+                HStack(spacing: 7) {
+                    Text("⟲ 思维链接 · 与你的一条高亮相连")
+                        .font(.system(size: 11.5, weight: .semibold))
+                    Text(thoughtLinkExpanded ? "⌃" : "⌄")
+                }
+                .foregroundStyle(palette.accent)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 6)
+                .background(palette.accentSoft, in: Capsule())
+                .overlay(Capsule().strokeBorder(palette.accentSoft2, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+
+            if thoughtLinkExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    linkPane("现在 · \(link.currentSource)", text: link.currentText, italic: true)
+                    Text("⟷")
+                        .font(.system(size: 13))
+                        .foregroundStyle(palette.accent)
+                        .frame(maxWidth: .infinity)
+                    linkPane("你的高亮 · \(link.relatedSource)", text: link.relatedText, italic: false)
+                    Text(link.explanation)
+                        .font(.system(size: 12))
+                        .lineSpacing(4.5)
+                        .foregroundStyle(palette.ink2)
+                        .padding(.top, 2)
+                    HStack(spacing: 7) {
+                        Button("就此追问 ↩") {
+                            askCompanion(about: link.explanation)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(palette.onAccent)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 6)
+                        .background(palette.accent, in: Capsule())
+
+                        Button(thoughtLinkSaved ? "✓ 已存为链接卡" : "存为链接卡") {
+                            saveThoughtLinkCard()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(thoughtLinkSaved ? palette.accent : palette.ink2)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 6)
+                        .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+                        .disabled(thoughtLinkSaved)
+                    }
+                }
+                .padding(14)
+                .emptyCard(palette, radius: 14)
+            }
+        }
+    }
+
+    private func linkPane(_ label: String, text: String, italic: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(palette.ink3)
+            Text(text)
+                .font(.system(size: 12, design: .serif))
+                .italic(italic)
+                .lineSpacing(4)
+                .foregroundStyle(palette.ink)
+                .lineLimit(3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(9)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(palette.line, lineWidth: 1)
+        )
+    }
+
+    /// Floating 朗读条, above the tab bar like the prototype.
+    private var aloudBar: some View {
+        HStack(spacing: 11) {
+            Button {
+                aloud.togglePause()
+            } label: {
+                Text(aloud.isSpeaking ? "❚❚" : "▶")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(palette.onAccent)
+                    .frame(width: 26, height: 26)
+                    .background(palette.accent, in: Circle())
+            }
+            .buttonStyle(.plain)
+
+            HStack(spacing: 2.5) {
+                ForEach(0..<5, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(palette.accent)
+                        .frame(width: 2.5, height: CGFloat([7, 13, 9, 15, 6][index]))
+                        .opacity(index.isMultiple(of: 2) ? 0.95 : 0.65)
+                }
+            }
+
+            Text("正在朗读 · 1.0×")
+                .font(.system(size: 11.5))
+        }
+        .foregroundStyle(palette.window)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(palette.ink, in: Capsule())
+        .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
     }
 
     private var backgroundColor: Color {
-        isDarkMode ? Color(hex: 0x1F1B16) : Color(hex: 0xF7F2E9)
+        palette.window
+    }
+
+    // MARK: Selection actions
+
+    private enum SelectionAction {
+        case explain, translate
+    }
+
+    private func handleSelectionChange(_ selection: ReaderSelection?) {
+        pendingSelection = selection
+        marginNote = nil
+        if let selection {
+            Task { await detectThoughtLink(for: selection.text) }
+        }
+    }
+
+    private func runSelectionAction(_ action: SelectionAction) {
+        guard let selection = pendingSelection, !isSelectionWorking else { return }
+        isSelectionWorking = true
+        Task {
+            defer { isSelectionWorking = false }
+            do {
+                let resolution = AIProviderSettings.load().resolveUsableService()
+                let question = action == .explain
+                    ? "Explain this passage to a thoughtful reader. Reply in Chinese with etymology or nuance when helpful."
+                    : "Translate this passage into natural Chinese, preserving literary tone."
+                let answer = try await resolution.service.answer(
+                    question: question,
+                    groundedIn: [GroundedPassage(id: 0, text: selection.text)]
+                )
+                marginNote = answer.text
+                marginSubject = selection.text
+            } catch {
+                marginNote = "出错了:\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func askCompanion(about text: String) {
+        guard let onAskCompanion else { return }
+        pendingSelection = nil
+        onAskCompanion(
+            "关于「\(text.prefix(60))」",
+            currentReadingPosition
+        )
+    }
+
+    private func detectThoughtLink(for passage: String) async {
+        do {
+            if var link = try ThoughtLinkFinder(modelContext: modelContext).findLink(
+                passage: passage,
+                book: book,
+                chapterIndex: currentChapterIndex
+            ) {
+                if let explained = try? await ThoughtLinkFinder(modelContext: modelContext)
+                    .explainLink(link) {
+                    link.explanation = explained
+                }
+                thoughtLink = link
+                thoughtLinkExpanded = false
+                thoughtLinkSaved = false
+            }
+        } catch {
+            thoughtLink = nil
+        }
+    }
+
+    /// 思维链接 → 链接卡 in the cards screen.
+    private func saveThoughtLinkCard() {
+        guard let thoughtLink, !thoughtLinkSaved else { return }
+        let card = StudyCardEntry(
+            question: "「\(thoughtLink.currentText.prefix(60))」 ⟷ 「\(thoughtLink.relatedText.prefix(60))」",
+            answer: thoughtLink.explanation,
+            source: "\(thoughtLink.currentSource) ⟷ \(thoughtLink.relatedSource)",
+            kind: .link
+        )
+        card.book = book
+        modelContext.insert(card)
+        try? modelContext.save()
+        thoughtLinkSaved = true
+    }
+
+    private func toggleAloud() {
+        if aloud.isSpeaking {
+            aloud.stop()
+            return
+        }
+        if let text = pendingSelection?.text ?? currentChapterPlainText() {
+            let lang = book.languageTag?.hasPrefix("zh") == true ? "zh-CN" : "en-US"
+            aloud.speak(String(text.prefix(800)), language: lang)
+        }
+    }
+
+    private func resetChapterArtifacts() {
+        pendingSelection = nil
+        marginNote = nil
+        marginSubject = nil
+        thoughtLink = nil
+        thoughtLinkExpanded = false
+        thoughtLinkSaved = false
+        chapterPageInfo = nil
+        inlineNotes = []
+    }
+
+    // MARK: 双语对照 (译)
+
+    /// Translates the visible paragraphs the chapter page reports, in
+    /// reading order, replaying cached ones instantly.
+    private func handleVisibleParagraphs(_ paragraphs: [ReaderParagraph]) {
+        guard isBilingual else { return }
+        let chapter = currentChapterIndex
+        var missing: [ReaderParagraph] = []
+        for paragraph in paragraphs {
+            let key = inlineNoteKey(chapter: chapter, idx: paragraph.idx)
+            if let cached = inlineCache[key] {
+                if !cached.isEmpty,
+                   !inlineNotes.contains(where: { $0.idx == paragraph.idx }) {
+                    inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: cached))
+                }
+            } else if !inlineInFlight.contains(key) {
+                inlineInFlight.insert(key)
+                missing.append(paragraph)
+            }
+        }
+        guard !missing.isEmpty else { return }
+        Task { await translateParagraphs(missing, chapter: chapter) }
+    }
+
+    private func inlineNoteKey(chapter: Int, idx: Int) -> Int {
+        chapter << 16 | idx
+    }
+
+    private func translateParagraphs(_ paragraphs: [ReaderParagraph], chapter: Int) async {
+        let resolution = AIProviderSettings.load().resolveUsableService()
+        guard resolution.service.availability.isAvailable else {
+            for paragraph in paragraphs {
+                inlineInFlight.remove(inlineNoteKey(chapter: chapter, idx: paragraph.idx))
+            }
+            return
+        }
+        for paragraph in paragraphs {
+            let key = inlineNoteKey(chapter: chapter, idx: paragraph.idx)
+            defer { inlineInFlight.remove(key) }
+            // Reader moved on — skip the model call, leave it uncached.
+            guard isBilingual, currentChapterIndex == chapter else { continue }
+            do {
+                let answer = try await resolution.service.answer(
+                    question: "Translate this paragraph into natural, literary Simplified Chinese. Output only the translation, nothing else.",
+                    groundedIn: [GroundedPassage(id: 0, text: paragraph.text)]
+                )
+                let text = answer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                inlineCache[key] = text
+                if isBilingual, currentChapterIndex == chapter, !text.isEmpty {
+                    inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
+                }
+            } catch {
+                // Cache the failure so a flaky provider isn't re-polled on
+                // every page turn.
+                inlineCache[key] = ""
+            }
+        }
     }
 
     private var resumeUTF16Offset: Int {
@@ -1605,12 +1877,11 @@ struct ChapterListView: View {
 struct ReadingSettingsView: View {
     @Binding var fontSize: Double
     @Binding var lineSpacing: Double
-    @Binding var isDarkMode: Bool
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Font Size") {
+                Section("字号") {
                     HStack {
                         Text("A")
                             .font(.caption)
@@ -1621,7 +1892,7 @@ struct ReadingSettingsView: View {
                     .padding(.vertical, 4)
                 }
 
-                Section("Line Spacing") {
+                Section("行距") {
                     HStack {
                         Image(systemName: "text.alignleft")
                             .font(.caption)
@@ -1631,12 +1902,8 @@ struct ReadingSettingsView: View {
                     }
                     .padding(.vertical, 4)
                 }
-
-                Section("Appearance") {
-                    Toggle("Dark Mode", isOn: $isDarkMode)
-                }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("阅读设置")
             #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

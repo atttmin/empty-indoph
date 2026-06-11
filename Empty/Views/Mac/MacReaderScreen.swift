@@ -275,8 +275,7 @@ struct MacReaderScreen: View {
         .sheet(isPresented: $showSettings) {
             ReadingSettingsView(
                 fontSize: $fontSize,
-                lineSpacing: $lineSpacing,
-                isDarkMode: .constant(palette.isDark)
+                lineSpacing: $lineSpacing
             )
             .frame(minWidth: 320, minHeight: 280)
         }
@@ -440,8 +439,7 @@ struct MacReaderScreen: View {
             .sheet(isPresented: $showSettings) {
                 ReadingSettingsView(
                     fontSize: $fontSize,
-                    lineSpacing: $lineSpacing,
-                    isDarkMode: .constant(palette.isDark)
+                    lineSpacing: $lineSpacing
                 )
                 .frame(minWidth: 320, minHeight: 280)
             }

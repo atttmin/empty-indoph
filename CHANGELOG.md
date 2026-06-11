@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- iOS 随身伴读 aligned with the 02 iOS prototype:
+  - 书库 / 阅读 / 卡片 behind a floating capsule tab bar, plus the
+    vermilion 朱 button that summons a half-screen AI companion sheet
+    from anywhere (same spoiler-safe `CompanionModel` as the Mac panel,
+    now shared cross-platform)
+  - 书库: time-of-day greeting with real minutes-read-today, a
+    continue-reading card, the 朱批·今日伴读 nudge (去复习 / 今天跳过,
+    built from due reviews and recent highlights), and a three-column
+    designed-cover shelf with import tile
+  - 阅读: prototype top bar (centered position line incl. 剩 N 页),
+    「译」toggle that translates each paragraph in-flow as you reach it,
+    selection bar 解释 / 翻译 / 追问 ↩ / 高亮 (EPUB and PDF), 朱批 margin
+    note with 继续追问, ⟲ 思维链接 card with 存为链接卡, and the floating
+    朗读条 (TTS now on iOS too)
+  - 卡片: one stream merging highlight cards, 复习卡 / 问答卡 / 链接卡,
+    a compact Ebbinghaus 生词复习 card (cloze, 忘了 / 记得✓, 下次队列),
+    and a 朱批·发现关联 footer
+
+### Changed
+
+- iOS information architecture follows the prototype: the former
+  Library / Notes / Study system tabs and the form-style Ask-the-Book
+  sheet are replaced by 书库 / 阅读 / 卡片 + the conversational 朱 sheet
+  (`LibraryView`, `NotesView`, `StudyView`, `VocabReviewView`,
+  `AskBookView` removed); reading settings dropped their own dark-mode
+  toggle — the reader now follows the system / workbench theme
+
+### Added (Mac batch)
+
 - 双语对照 / 导读 in-flow reading modes (Mac, EPUB): the reader translates
   or retells each paragraph **as you reach it**, injecting quiet gray
   serif translations (双语) or 朱批-style callouts (导读) directly under

@@ -312,30 +312,6 @@ struct MiniCover: View {
     }
 }
 
-/// Deterministic placeholder-cover styling, modeled on the prototype's
-/// shelf (forest green, navy, parchment, gold, lacquer black).
-nonisolated struct CoverStyle {
-    let background: Color
-    let foreground: Color
-
-    static let all: [CoverStyle] = [
-        CoverStyle(background: Color(hex: 0x3E4F3A), foreground: Color(hex: 0xE8E4D2)),
-        CoverStyle(background: Color(hex: 0x2E3A56), foreground: Color(hex: 0xD8DCE8)),
-        CoverStyle(background: Color(hex: 0xEFE6D2), foreground: Color(hex: 0x1F1B16)),
-        CoverStyle(background: Color(hex: 0xC9A86A), foreground: Color(hex: 0x3A2E18)),
-        CoverStyle(background: Color(hex: 0x211D19), foreground: Color(hex: 0xC9A86A)),
-        CoverStyle(background: Color(hex: 0x1B2B4A), foreground: Color(hex: 0xD9B65C)),
-    ]
-
-    static func style(for title: String) -> CoverStyle {
-        var hash: UInt64 = 5381
-        for byte in title.utf8 {
-            hash = hash &* 33 &+ UInt64(byte)
-        }
-        return all[Int(hash % UInt64(all.count))]
-    }
-}
-
 #Preview {
     MacRootView()
         .modelContainer(try! AppStores.makeContainer(ephemeral: true))
