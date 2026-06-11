@@ -336,6 +336,14 @@ struct NativeChapterReaderView: View {
         appearance.theme.inkHexes(baseIsDark: palette.isDark)
     }
 
+    private var inlineNotesByIndex: [Int: InlineNotePaint] {
+        var notesByIndex: [Int: InlineNotePaint] = [:]
+        for note in inlineNotes {
+            notesByIndex[note.idx] = note
+        }
+        return notesByIndex
+    }
+
     private func selectableText(
         for block: NativeChapterBlock,
         fontSize: Double,
@@ -413,7 +421,7 @@ struct NativeChapterReaderView: View {
 
     @ViewBuilder
     private func inlineNoteView(for index: Int) -> some View {
-        let note = inlineNotes.first { $0.idx == index }
+        let note = inlineNotesByIndex[index]
         let title = inlineMode == .bilingual ? "译" : "导读"
         let body = note?.failed == true
             ? "暂不可用，稍后会自动重试。"

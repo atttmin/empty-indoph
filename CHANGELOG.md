@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-paragraph excerpts can be selected and sent back through the same
   explain / translate / highlight flow.
 
+- Native EPUB selection felt much slower in 双语 mode than the older reader:
+  native text views were forwarding every drag-step selection update upstream,
+  which retriggered SwiftUI reconciliation while the parallel inline-note
+  layout was visible. Selection callbacks are now debounced to the settled
+  range, and inline note lookup is indexed by paragraph id instead of scanning
+  the whole note list on every render pass.
 - Highlight rows only jumped to chapter starts and existing notes were
   read-only: the highlight sheet now jumps back to the stored UTF-16 anchor,
   exposes inline “写批注 / 编辑批注”, and Mac reader top bars also surface the

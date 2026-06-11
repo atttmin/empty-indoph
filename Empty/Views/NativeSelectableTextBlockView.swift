@@ -163,8 +163,6 @@ private func nativeFont(
             descriptor = bold
         }
         let font = UIFont(descriptor: descriptor, size: size)
-        // A descriptor for an unknown family silently resolves to the
-        // default sans — only trust it when the family really matched.
         if font.familyName == family || font.fontName.contains(family.replacingOccurrences(of: " ", with: "")) {
             return font
         }
@@ -215,12 +213,14 @@ private struct NativeSelectableTextRepresentable: UIViewRepresentable {
         }
 
         if clearSelection, textView.selectedRange.length > 0 {
+            context.coordinator.selectionDebouncer.cancel()
             context.coordinator.programmaticChange = true
             textView.selectedRange = NSRange(location: NSNotFound, length: 0)
             context.coordinator.programmaticChange = false
             context.coordinator.appliedSelection = nil
         } else if let selectedRange,
                   context.coordinator.appliedSelection != selectedRange {
+            context.coordinator.selectionDebouncer.cancel()
             let range = clampedNSRange(for: selectedRange, textLength: model.text.utf16.count)
             context.coordinator.programmaticChange = true
             textView.selectedRange = range
@@ -254,6 +254,7 @@ private struct NativeSelectableTextRepresentable: UIViewRepresentable {
         var appliedSelection: NativeTextSelectionRequest?
         var appliedScrollTarget: Int?
         let onSelectionChange: (Range<Int>?) -> Void
+        let selectionDebouncer = SelectionChangeDebouncer()
 
         init(onSelectionChange: @escaping (Range<Int>?) -> Void) {
             self.onSelectionChange = onSelectionChange
@@ -262,14 +263,17 @@ private struct NativeSelectableTextRepresentable: UIViewRepresentable {
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard !programmaticChange else { return }
             let selection = textView.selectedRange
-            guard selection.location != NSNotFound, selection.length > 0 else {
-                onSelectionChange(nil)
-                return
-            }
-            onSelectionChange(selection.location..<(selection.location + selection.length))
+            let range: Range<Int>? =
+                if selection.location != NSNotFound, selection.length > 0 {
+                    selection.location..<(selection.location + selection.length)
+                } else {
+                    nil
+                }
+            selectionDebouncer.submit(range, deliver: onSelectionChange)
         }
     }
 }
+
 #elseif canImport(AppKit)
 private func nativeFont(
     size: Double,
@@ -350,12 +354,14 @@ private struct NativeSelectableTextRepresentable: NSViewRepresentable {
         }
 
         if clearSelection, textView.selectedRange().length > 0 {
+            context.coordinator.selectionDebouncer.cancel()
             context.coordinator.programmaticChange = true
             textView.setSelectedRange(NSRange(location: NSNotFound, length: 0))
             context.coordinator.programmaticChange = false
             context.coordinator.appliedSelection = nil
         } else if let selectedRange,
                   context.coordinator.appliedSelection != selectedRange {
+            context.coordinator.selectionDebouncer.cancel()
             let range = clampedNSRange(for: selectedRange, textLength: model.text.utf16.count)
             context.coordinator.programmaticChange = true
             textView.setSelectedRange(range)
@@ -396,6 +402,7 @@ private struct NativeSelectableTextRepresentable: NSViewRepresentable {
         var appliedSelection: NativeTextSelectionRequest?
         var appliedScrollTarget: Int?
         let onSelectionChange: (Range<Int>?) -> Void
+        let selectionDebouncer = SelectionChangeDebouncer()
 
         init(onSelectionChange: @escaping (Range<Int>?) -> Void) {
             self.onSelectionChange = onSelectionChange
@@ -405,11 +412,13 @@ private struct NativeSelectableTextRepresentable: NSViewRepresentable {
             guard !programmaticChange,
                   let textView = notification.object as? NSTextView else { return }
             let selection = textView.selectedRange()
-            guard selection.location != NSNotFound, selection.length > 0 else {
-                onSelectionChange(nil)
-                return
-            }
-            onSelectionChange(selection.location..<(selection.location + selection.length))
+            let range: Range<Int>? =
+                if selection.location != NSNotFound, selection.length > 0 {
+                    selection.location..<(selection.location + selection.length)
+                } else {
+                    nil
+                }
+            selectionDebouncer.submit(range, deliver: onSelectionChange)
         }
     }
 }
