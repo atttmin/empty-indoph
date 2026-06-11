@@ -56,6 +56,10 @@ struct ReadingAgent {
                 }
                 let result = try await toolbox.run(tool, argument: argument)
                 steps.append(result.traceLabel)
+                if result.citedMemory, !steps.contains("⚲ 引用了记忆") {
+                    // 防剧透三定律 ③: memory citations are explicit.
+                    steps.append("⚲ 引用了记忆")
+                }
                 if let action = result.proposedAction {
                     actions.append(action)
                 }

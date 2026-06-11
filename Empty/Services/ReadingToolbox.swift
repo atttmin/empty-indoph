@@ -19,6 +19,8 @@ nonisolated struct CompanionAction: Identifiable, Equatable, Sendable {
         case addVocab(word: String, sentence: String)
         /// Insert the drafted flashcards as spaced-repetition study cards.
         case saveFlashcards([Flashcard])
+        /// Save a derived theme/insight into ReaderMemory.
+        case saveMemory(title: String, body: String, tags: [String])
     }
 
     let id: UUID
@@ -44,6 +46,9 @@ nonisolated struct ReadingToolResult {
     var traceLabel: String
     /// Confirm-gated write, when the tool proposes one.
     var proposedAction: CompanionAction?
+    /// True when reader memory contributed real entries — the reply
+    /// trace must disclose it (⚲ 引用了记忆).
+    var citedMemory = false
 }
 
 /// One tool's catalog entry, rendered into the prompt.
@@ -83,6 +88,21 @@ struct ReadingToolbox {
             argumentHint: "the passage or idea"
         ),
         ReadingToolSpec(
+            name: "recall_reader_memory",
+            summary: "Recall the reader's long-term memory: past highlights with notes, link cards, saved Q&A across all books.",
+            argumentHint: "the theme or question"
+        ),
+        ReadingToolSpec(
+            name: "search_highlights",
+            summary: "Search the reader's highlight snapshots and notes by keyword.",
+            argumentHint: "the keyword"
+        ),
+        ReadingToolSpec(
+            name: "propose_memory",
+            summary: "Propose saving a one-line insight into the reader's long-term memory (the reader confirms).",
+            argumentHint: "the insight, one sentence"
+        ),
+        ReadingToolSpec(
             name: "add_vocab",
             summary: "Propose adding a word to the vocabulary book (the reader confirms).",
             argumentHint: "the single word or phrase"
@@ -112,6 +132,12 @@ struct ReadingToolbox {
             return try await explain(text: trimmed)
         case "find_link":
             return try await findLink(passage: trimmed)
+        case "recall_reader_memory":
+            return try recallReaderMemory(query: trimmed)
+        case "search_highlights":
+            return try searchHighlights(keyword: trimmed)
+        case "propose_memory":
+            return proposeMemory(insight: trimmed)
         case "add_vocab":
             return addVocab(word: trimmed)
         case "make_flashcards":
@@ -208,6 +234,73 @@ struct ReadingToolbox {
         )
     }
 
+    // MARK: ReaderMemory tools
+
+    private func recallReaderMemory(query: String) throws -> ReadingToolResult {
+        guard !query.isEmpty else {
+            return ReadingToolResult(observation: "没有给出要回忆的主题。", traceLabel: "忆")
+        }
+        // Sync first so fresh highlights/cards are recallable immediately.
+        let memory = ReaderMemory(modelContext: modelContext)
+        try? memory.syncFromReaderData()
+        let hits = try memory.recall(query: query, limit: 5)
+        let observation = try memory.recallObservation(query: query)
+        return ReadingToolResult(
+            observation: observation,
+            traceLabel: "忆「\(query.prefix(10))」",
+            citedMemory: !hits.isEmpty
+        )
+    }
+
+    private func searchHighlights(keyword: String) throws -> ReadingToolResult {
+        guard !keyword.isEmpty else {
+            return ReadingToolResult(observation: "搜索词为空。", traceLabel: "搜高亮")
+        }
+        let highlights = try modelContext.fetch(
+            FetchDescriptor<Highlight>(
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+        )
+        let hits = highlights.filter {
+            $0.textSnapshot.localizedCaseInsensitiveContains(keyword)
+                || ($0.note?.localizedCaseInsensitiveContains(keyword) ?? false)
+        }.prefix(5)
+        guard !hits.isEmpty else {
+            return ReadingToolResult(
+                observation: "高亮里没有包含「\(keyword)」的内容。",
+                traceLabel: "搜高亮「\(keyword.prefix(10))」"
+            )
+        }
+        let body = hits.map { highlight -> String in
+            let source = highlight.book?.title ?? "未知书"
+            let note = highlight.note.map { " 批注:\($0.prefix(120))" } ?? ""
+            return "[\(source) · 第 \(highlight.chapterIndex + 1) 章]「\(highlight.textSnapshot.prefix(160))」\(note)"
+        }.joined(separator: "\n")
+        return ReadingToolResult(
+            observation: body,
+            traceLabel: "搜高亮「\(keyword.prefix(10))」"
+        )
+    }
+
+    private func proposeMemory(insight: String) -> ReadingToolResult {
+        guard !insight.isEmpty else {
+            return ReadingToolResult(observation: "没有给出要记住的内容。", traceLabel: "建议记住")
+        }
+        let action = CompanionAction(
+            title: "记住:\(insight.prefix(24))…",
+            kind: .saveMemory(
+                title: String(insight.prefix(40)),
+                body: insight,
+                tags: []
+            )
+        )
+        return ReadingToolResult(
+            observation: "已把这条洞见提交给读者确认记入长期记忆。不要重复提交。",
+            traceLabel: "建议记住(待确认)",
+            proposedAction: action
+        )
+    }
+
     // MARK: Write tools (proposal only — the reader confirms)
 
     private func addVocab(word: String) -> ReadingToolResult {
@@ -290,6 +383,19 @@ struct ReadingToolbox {
             }
             try modelContext.save()
             return "已保存 \(cards.count) 张闪卡,可在卡片/生词屏复习。"
+        case .saveMemory(let title, let body, let tags):
+            let item = MemoryItem(
+                kind: .theme,
+                title: title,
+                body: body,
+                bookID: book.id,
+                sourceLabel: book.title,
+                tags: tags,
+                isUserConfirmed: true
+            )
+            modelContext.insert(item)
+            try modelContext.save()
+            return "已记入读者记忆:\(title)"
         }
     }
 }

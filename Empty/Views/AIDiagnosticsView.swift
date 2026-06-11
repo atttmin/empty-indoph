@@ -17,6 +17,8 @@ struct AIDiagnosticsView: View {
     @State private var settings = AIProviderSettings.load()
     @State private var registry = AIProviderRegistry.load()
     @State private var apiKey = KeychainStore.read(account: AIProviderSettings.apiKeyAccount) ?? ""
+    @AppStorage(ReaderMemory.enabledKey) private var memoryEnabled = true
+    @State private var showMemory = false
 
     @State private var sampleText = ""
     @State private var summary = ""
@@ -41,6 +43,9 @@ struct AIDiagnosticsView: View {
 
                     sectionLabel("按功能分配")
                     featureRouting
+
+                    sectionLabel("读者记忆")
+                    memoryCard
 
                     sectionLabel("连通性测试")
                     testCard
@@ -71,6 +76,41 @@ struct AIDiagnosticsView: View {
         .onChange(of: apiKey) { _, newValue in
             persistAPIKey(newValue)
         }
+    }
+
+    // MARK: 读者记忆
+
+    private var memoryCard: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(memoryEnabled ? "⚲ 记忆开启 — 朱会记得你的批注与问答" : "⚲ 记忆已关闭 — 朱当下失忆")
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundStyle(memoryEnabled ? palette.ink : palette.ink3)
+                Text("回答里引用记忆时会显式标注。条目可逐条管理。")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(palette.ink3)
+            }
+            Spacer()
+            Toggle("", isOn: $memoryEnabled)
+                .labelsHidden()
+                .tint(palette.accent)
+            Button {
+                showMemory = true
+            } label: {
+                Text("管理")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(palette.ink2)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showMemory) {
+                ReaderMemoryView()
+            }
+        }
+        .padding(14)
+        .emptyCard(palette, radius: 12)
     }
 
     // MARK: 按功能分配 (feature → provider routing)
