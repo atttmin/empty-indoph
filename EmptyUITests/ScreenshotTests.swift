@@ -21,10 +21,14 @@ final class ScreenshotTests: XCTestCase {
     @MainActor
     func testCaptureMacLibrary() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["-ScreenshotSeed"]
         app.launch()
 
         let libraryTitle = app.staticTexts["书库"]
         XCTAssertTrue(libraryTitle.waitForExistence(timeout: 8))
+
+        let seededBook = app.staticTexts["思维之书"].firstMatch
+        XCTAssertTrue(seededBook.waitForExistence(timeout: 8))
 
         try saveScreenshot(named: "mac-library", from: app)
     }
@@ -32,20 +36,12 @@ final class ScreenshotTests: XCTestCase {
     @MainActor
     func testCaptureMacReader() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["-ScreenshotSeed", "-OpenReader"]
         app.launch()
-
-        let continueButton = app.buttons["继续阅读 →"]
-        if continueButton.waitForExistence(timeout: 8) {
-            continueButton.tap()
-        } else {
-            let recentBook = app.staticTexts["The Book of Elon"].firstMatch
-            if recentBook.waitForExistence(timeout: 3) {
-                recentBook.tap()
-            }
-        }
 
         let readerChrome = app.staticTexts["‹ 书库"]
         XCTAssertTrue(readerChrome.waitForExistence(timeout: 12))
+        XCTAssertTrue(app.staticTexts["思维之书"].firstMatch.waitForExistence(timeout: 4))
 
         sleep(2)
         try saveScreenshot(named: "mac-reader", from: app)
@@ -55,10 +51,12 @@ final class ScreenshotTests: XCTestCase {
     @MainActor
     func testCaptureIOSLibrary() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["-ScreenshotSeed"]
         app.launch()
 
         let libraryTab = app.tabBars.buttons["书库"]
         XCTAssertTrue(libraryTab.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["思维之书"].firstMatch.waitForExistence(timeout: 8))
 
         sleep(1)
         try saveScreenshot(named: "ios-library", from: app)
@@ -67,12 +65,11 @@ final class ScreenshotTests: XCTestCase {
     @MainActor
     func testCaptureIOSReading() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["-ScreenshotSeed", "-OpenReader"]
         app.launch()
 
-        let readTab = app.tabBars.buttons["阅读"]
-        if readTab.waitForExistence(timeout: 5) {
-            readTab.tap()
-        }
+        let readerBack = app.buttons["‹ 书库"]
+        XCTAssertTrue(readerBack.waitForExistence(timeout: 12))
 
         sleep(2)
         try saveScreenshot(named: "ios-reading", from: app)

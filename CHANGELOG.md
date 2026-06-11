@@ -116,6 +116,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ScrollView + LazyVStack`, with visible-paragraph reporting for 双语/导读
   and stable inline-note insertion without WebView DOM reflow
 
+
+- Deterministic screenshot/smoke launch hooks for both platforms: Mac now
+  honors `-ScreenshotSeed` like iOS, and the screenshot UI tests seed/open the
+  demo book through launch arguments instead of relying on whatever book
+  happened to be in the library.
 ### Added (earlier rounds)
 
 - iOS 随身伴读 aligned with the 02 iOS prototype:

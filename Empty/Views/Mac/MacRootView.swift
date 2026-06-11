@@ -54,8 +54,10 @@ struct MacRootView: View {
         .onAppear(perform: applyLaunchOverrides)
     }
 
-    /// `-OpenReader` opens the most recently read book (screenshot automation).
+    /// `-ScreenshotSeed` imports a demo book and `-OpenReader` opens the most
+    /// recently read one (screenshot / smoke automation).
     private func applyLaunchOverrides() {
+        try? ScreenshotSeeder.seedDemoBookIfNeeded(modelContext: modelContext)
         guard ProcessInfo.processInfo.arguments.contains("-OpenReader") else { return }
         let descriptor = FetchDescriptor<Book>(
             sortBy: [SortDescriptor(\Book.lastOpenedAt, order: .reverse)]
