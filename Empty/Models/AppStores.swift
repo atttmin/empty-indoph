@@ -35,6 +35,7 @@ enum AppStores {
         ReadingSession.self,
         VocabEntry.self,
         StudyCardEntry.self,
+        Bookmark.self,
     ])
 
     static let localSchema = Schema([
@@ -87,6 +88,7 @@ enum AppStores {
             ReadingSession.self,
             VocabEntry.self,
             StudyCardEntry.self,
+            Bookmark.self,
             Chapter.self,
             Chunk.self,
             ParagraphTranslation.self,

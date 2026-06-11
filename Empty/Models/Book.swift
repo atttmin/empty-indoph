@@ -95,6 +95,9 @@ final class Book {
     @Relationship(deleteRule: .cascade, inverse: \StudyCardEntry.book)
     var studyCards: [StudyCardEntry]?
 
+    @Relationship(deleteRule: .cascade, inverse: \Bookmark.book)
+    var bookmarks: [Bookmark]?
+
     init(title: String, author: String = "", format: BookFormat) {
         self.title = title
         self.author = author

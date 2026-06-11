@@ -81,6 +81,7 @@ struct MacReaderScreen: View {
     @State private var isTocOpen = false
     @State private var chromeHidden = false
     @State private var chromeTimer: Task<Void, Never>?
+    @State private var bookmarkedHere = false
     /// Per-chapter pre-translation activity for the TOC chips.
     @State private var pretransProgress: [Int: MacChapterTransStatus] = [:]
     /// Translated chapter titles for the bilingual TOC (kind `.title`).
@@ -255,6 +256,9 @@ struct MacReaderScreen: View {
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     isTocOpen = false
                                 }
+                            },
+                            onJump: { position in
+                                jumpToHighlight(position)
                             }
                         )
                         .frame(width: 272)
@@ -402,6 +406,7 @@ struct MacReaderScreen: View {
             pendingSelection = nil
             refreshChapterHighlights()
             resetChapterArtifacts()
+            refreshBookmarkState()
             Task { await loadChapterSummary() }
             // Shift the 预译 window (current + next two chapters).
             startPretranslation()
@@ -693,6 +698,21 @@ struct MacReaderScreen: View {
             pillButton("目录", identifier: "reader.chapterList") { showChapterList = true }
             pillButton("高亮", identifier: "reader.highlights") { showHighlights = true }
             pillButton("设置", identifier: "reader.settings") { showSettings = true }
+
+            Button {
+                toggleBookmark()
+            } label: {
+                Image(systemName: bookmarkedHere ? "bookmark.fill" : "bookmark")
+                    .font(.system(size: 12))
+                    .foregroundStyle(bookmarkedHere ? palette.accent : palette.ink2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("d", modifiers: .command)
+            .help("书签（⌘D）")
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -1702,6 +1722,35 @@ struct MacReaderScreen: View {
         pendingSelection = nil
     }
 
+    // MARK: 书签 (⌘D)
+
+    private func refreshBookmarkState() {
+        bookmarkedHere = ((try? BookmarkStore(modelContext: modelContext)
+            .bookmarks(for: book)) ?? [])
+            .contains {
+                $0.chapterIndex == currentChapterIndex
+                    && abs($0.utf16Offset - currentUTF16Offset) < 600
+            }
+    }
+
+    private func toggleBookmark() {
+        let chapterText = currentChapterPlainText() ?? ""
+        let utf16 = Array(chapterText.utf16)
+        let start = max(0, min(currentUTF16Offset, max(0, utf16.count - 1)))
+        let end = min(utf16.count, start + 80)
+        let snippet = String(decoding: utf16[start..<end], as: UTF16.self)
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        try? BookmarkStore(modelContext: modelContext).toggle(
+            book: book,
+            chapterIndex: currentChapterIndex,
+            utf16Offset: currentUTF16Offset,
+            snippet: snippet.isEmpty ? "第 \(currentChapterIndex + 1) 章" : snippet
+        )
+        cacheStatsTick += 1
+        refreshBookmarkState()
+    }
+
     private func lookUpSelectionInDictionary() {
         guard let selection = pendingSelection else { return }
         let term = selection.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1790,9 +1839,24 @@ private struct MacTOCPanel: View {
     let book: Book
     var onSelect: (Int) -> Void
     var onClose: () -> Void
+    /// Jump to an exact in-chapter position (bookmark / search hit).
+    var onJump: (ReadingPosition) -> Void = { _ in }
 
     @Environment(\.emptyPalette) private var palette
     @Environment(\.modelContext) private var modelContext
+
+    private enum DrawerTab: String, CaseIterable {
+        case toc = "目录"
+        case bookmarks = "书签"
+        case search = "搜索"
+    }
+
+    @State private var tab: DrawerTab = .toc
+    @State private var bookmarks: [Bookmark] = []
+    @State private var searchQuery = ""
+    @State private var searchRead: [BookSearchHit] = []
+    @State private var searchUnread: [BookSearchHit] = []
+    @State private var unreadExpanded = false
 
     private struct ChapterFacts {
         var utf16Length = 0
@@ -1807,13 +1871,23 @@ private struct MacTOCPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("目录")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(palette.ink)
-                Text("\(bookTitle) · \(titles.count) 章")
-                    .font(.system(size: 11))
-                    .foregroundStyle(palette.ink3)
-                    .lineLimit(1)
+                ForEach(DrawerTab.allCases, id: \.self) { choice in
+                    Button {
+                        tab = choice
+                    } label: {
+                        Text(choice.rawValue)
+                            .font(.system(size: 12, weight: tab == choice ? .bold : .regular))
+                            .foregroundStyle(tab == choice ? palette.accent : palette.ink3)
+                            .padding(.vertical, 2)
+                            .overlay(alignment: .bottom) {
+                                if tab == choice {
+                                    Rectangle().fill(palette.accent).frame(height: 2)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
                 Spacer()
                 Button(action: onClose) {
                     Text("×")
@@ -1826,27 +1900,220 @@ private struct MacTOCPanel: View {
             }
             .padding(EdgeInsets(top: 16, leading: 18, bottom: 10, trailing: 14))
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
-                            row(index: index, title: title)
-                                .id(index)
-                        }
-                    }
-                    .padding(EdgeInsets(top: 2, leading: 10, bottom: 10, trailing: 10))
-                }
-                .onAppear {
-                    proxy.scrollTo(currentIndex, anchor: .center)
-                }
+            switch tab {
+            case .toc:
+                tocList
+                footer
+            case .bookmarks:
+                bookmarkList
+            case .search:
+                searchPane
             }
-
-            footer
         }
         .background(palette.side)
         .task(id: statsTick) {
             refreshFacts()
         }
+    }
+
+    private var tocList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
+                        row(index: index, title: title)
+                            .id(index)
+                    }
+                }
+                .padding(EdgeInsets(top: 2, leading: 10, bottom: 10, trailing: 10))
+            }
+            .onAppear {
+                proxy.scrollTo(currentIndex, anchor: .center)
+            }
+        }
+    }
+
+    // MARK: 书签
+
+    private var bookmarkList: some View {
+        ScrollView {
+            VStack(spacing: 4) {
+                if bookmarks.isEmpty {
+                    Text("还没有书签 — 阅读时按 ⌘D 在当前位置留一枚。")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(palette.ink3)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 28)
+                        .padding(.horizontal, 16)
+                }
+                ForEach(bookmarks) { bookmark in
+                    bookmarkRow(bookmark)
+                }
+            }
+            .padding(EdgeInsets(top: 2, leading: 10, bottom: 10, trailing: 10))
+        }
+        .task(id: statsTick) { reloadBookmarks() }
+        .onAppear { reloadBookmarks() }
+    }
+
+    private func bookmarkRow(_ bookmark: Bookmark) -> some View {
+        Button {
+            onJump(ReadingPosition(
+                chapterIndex: bookmark.chapterIndex,
+                utf16Offset: bookmark.utf16Offset
+            ))
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Image(systemName: "bookmark.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(palette.accent)
+                    Text(chapterLabel(bookmark.chapterIndex))
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(palette.ink2)
+                    Spacer()
+                    Button {
+                        try? BookmarkStore(modelContext: modelContext).delete(bookmark)
+                        reloadBookmarks()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10))
+                            .foregroundStyle(palette.ink3)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text(bookmark.snippet)
+                    .font(.system(size: 12, design: .serif))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(palette.card.opacity(0.6), in: RoundedRectangle(cornerRadius: 9))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func reloadBookmarks() {
+        bookmarks = (try? BookmarkStore(modelContext: modelContext).bookmarks(for: book)) ?? []
+    }
+
+    // MARK: 搜索（未读折叠防剧透）
+
+    private var searchPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.ink3)
+                TextField("全文搜索…", text: $searchQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(palette.ink)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(palette.card, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(searchRead) { hit in
+                        searchHitRow(hit)
+                    }
+                    if !searchUnread.isEmpty {
+                        if unreadExpanded {
+                            Text("未读章节（小心剧透）")
+                                .font(.system(size: 10.5, weight: .bold))
+                                .foregroundStyle(palette.accent)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 6)
+                                .padding(.top, 8)
+                            ForEach(searchUnread) { hit in
+                                searchHitRow(hit)
+                            }
+                        } else {
+                            Button {
+                                unreadExpanded = true
+                            } label: {
+                                Text("未读章节中还有 \(searchUnread.count) 处 · 点开（可能剧透）")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(palette.ink3)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 9)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .strokeBorder(palette.line2, style: StrokeStyle(dash: [4, 4]))
+                                    )
+                                    .contentShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 6)
+                        }
+                    }
+                    if searchRead.isEmpty && searchUnread.isEmpty
+                        && searchQuery.trimmingCharacters(in: .whitespaces).count >= 2 {
+                        Text("没有找到「\(searchQuery)」")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(palette.ink3)
+                            .padding(.top, 24)
+                    }
+                }
+                .padding(EdgeInsets(top: 2, leading: 10, bottom: 10, trailing: 10))
+            }
+        }
+        .task(id: searchQuery) {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            runSearch()
+        }
+    }
+
+    private func searchHitRow(_ hit: BookSearchHit) -> some View {
+        Button {
+            onJump(ReadingPosition(
+                chapterIndex: hit.chapterIndex,
+                utf16Offset: hit.utf16Offset
+            ))
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(chapterLabel(hit.chapterIndex))
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(palette.ink3)
+                Text(hit.snippet)
+                    .font(.system(size: 12, design: .serif))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(palette.card.opacity(0.6), in: RoundedRectangle(cornerRadius: 9))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func runSearch() {
+        unreadExpanded = false
+        let result = (try? BookTextSearch(modelContext: modelContext).search(
+            book: book,
+            query: searchQuery,
+            maxReadChapter: max(currentIndex, book.position.chapterIndex)
+        )) ?? (read: [], unread: [])
+        searchRead = result.read
+        searchUnread = result.unread
+    }
+
+    private func chapterLabel(_ index: Int) -> String {
+        let title = titles.indices.contains(index) ? titles[index] : ""
+        let display = title.trimmingCharacters(in: .whitespaces).isEmpty
+            ? "第 \(index + 1) 章"
+            : title
+        return "\(RomanNumeral.format(index + 1)) · \(display)"
     }
 
     private func row(index: Int, title: String) -> some View {
