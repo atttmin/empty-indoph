@@ -158,7 +158,7 @@ struct ReadingView: View {
     @AppStorage("reader.aloud.autonext") private var aloudAutoNext = false
     @AppStorage("reader.pdf.invert") private var pdfNightInverted = false
     @AppStorage("reader.traditional") private var traditionalChinese = false
-    @State private var traditionalCache: [Int: (chapter: EPUBChapter, plain: String?)] = [:]
+    @State private var traditionalCache = DictionaryBox<Int, (chapter: EPUBChapter, plain: String?)>()
     @StateObject private var aloud = ReadingAloud()
 
     init(
@@ -392,7 +392,7 @@ struct ReadingView: View {
             startPretranslation()
         }
         .onChange(of: traditionalChinese) { _, _ in
-            traditionalCache = [:]
+            traditionalCache.values = [:]
             inlineNotes = []
             inlineCache = [:]
             inlineInFlight = []
@@ -1282,7 +1282,7 @@ struct ReadingView: View {
     /// chapter) when the 繁体 toggle is on. Source files never change.
     private func displayChapter(_ chapter: EPUBChapter) -> EPUBChapter {
         guard traditionalChinese else { return chapter }
-        if let cached = traditionalCache[currentChapterIndex] {
+        if let cached = traditionalCache.values[currentChapterIndex] {
             return cached.chapter
         }
         let converted = EPUBChapter(
@@ -1291,13 +1291,13 @@ struct ReadingView: View {
             content: ChineseVariant.traditional(chapter.content)
         )
         let plain = currentChapterPlainText().map(ChineseVariant.traditional)
-        traditionalCache[currentChapterIndex] = (converted, plain)
+        traditionalCache.values[currentChapterIndex] = (converted, plain)
         return converted
     }
 
     private func displayChapterPlainText() -> String? {
         guard traditionalChinese else { return currentChapterPlainText() }
-        if let cached = traditionalCache[currentChapterIndex] {
+        if let cached = traditionalCache.values[currentChapterIndex] {
             return cached.plain
         }
         return currentChapterPlainText().map(ChineseVariant.traditional)

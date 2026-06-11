@@ -572,7 +572,9 @@ struct PagedChapterReaderView: View {
 
         let parsed = NativeChapterParser.parse(chapter)
         self.document = parsed
-        self.blockSpans = parsed.resolvedTextSpans(in: chapterPlainText)
+        self.blockSpans = NativeChapterParser.resolvedSpans(
+            for: chapter, document: parsed, chapterPlainText: chapterPlainText
+        )
     }
 
     var body: some View {
@@ -940,7 +942,9 @@ struct MacPagedChapterReaderView: View {
 
         let parsed = NativeChapterParser.parse(chapter)
         self.document = parsed
-        self.blockSpans = parsed.resolvedTextSpans(in: chapterPlainText)
+        self.blockSpans = NativeChapterParser.resolvedSpans(
+            for: chapter, document: parsed, chapterPlainText: chapterPlainText
+        )
     }
 
     var body: some View {

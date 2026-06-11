@@ -283,8 +283,59 @@ nonisolated enum NativeChapterBlock: Equatable, Identifiable {
 /// relying on WebKit layout. EPUB spine documents are XHTML, so XMLParser is a
 /// reliable fast path for normal books; on malformed input we fall back to the
 /// existing plain-text extraction instead of yielding an empty reader.
+///
+/// Results memoize: reader views re-init on every parent render (notes
+/// arriving, chrome fades), and re-parsing a whole chapter each time is
+/// what made the app feel slow.
 nonisolated enum NativeChapterParser {
+    private final class DocumentBox {
+        let document: NativeChapterDocument
+        init(_ document: NativeChapterDocument) { self.document = document }
+    }
+
+    private final class SpansBox {
+        let spans: [String: NativeTextBlockSpan]
+        init(_ spans: [String: NativeTextBlockSpan]) { self.spans = spans }
+    }
+
+    // NSCache is internally thread-safe.
+    nonisolated(unsafe) private static let documentCache = NSCache<NSString, DocumentBox>()
+    nonisolated(unsafe) private static let spansCache = NSCache<NSString, SpansBox>()
+
+    /// Distinguishes chapters cheaply without hashing megabytes: href +
+    /// length + a content tail (catches the 繁体 conversion, whose length
+    /// is often identical).
+    private static func cacheKey(_ chapter: EPUBChapter) -> String {
+        "\(chapter.href)|\(chapter.content.utf16.count)|\(chapter.content.suffix(24))"
+    }
+
     static func parse(_ chapter: EPUBChapter) -> NativeChapterDocument {
+        let key = cacheKey(chapter) as NSString
+        if let hit = documentCache.object(forKey: key) {
+            return hit.document
+        }
+        let document = parseUncached(chapter)
+        documentCache.setObject(DocumentBox(document), forKey: key)
+        return document
+    }
+
+    /// Memoized `NativeChapterDocument.resolvedTextSpans` — the per-block
+    /// chapter-offset resolution is the other per-render hot spot.
+    static func resolvedSpans(
+        for chapter: EPUBChapter,
+        document: NativeChapterDocument,
+        chapterPlainText: String?
+    ) -> [String: NativeTextBlockSpan] {
+        let key = "\(cacheKey(chapter))|\(chapterPlainText?.utf16.count ?? -1)" as NSString
+        if let hit = spansCache.object(forKey: key) {
+            return hit.spans
+        }
+        let spans = document.resolvedTextSpans(in: chapterPlainText)
+        spansCache.setObject(SpansBox(spans), forKey: key)
+        return spans
+    }
+
+    private static func parseUncached(_ chapter: EPUBChapter) -> NativeChapterDocument {
         let parser = NativeChapterXMLParser(chapterHref: chapter.href)
         if let document = parser.parse(chapter.content), !document.blocks.isEmpty {
             return document

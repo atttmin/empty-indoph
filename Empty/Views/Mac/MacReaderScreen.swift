@@ -80,14 +80,16 @@ struct MacReaderScreen: View {
     @State private var inlineAIUnavailable = false
     @State private var isTocOpen = false
     @State private var chromeHidden = false
-    @State private var chromeTimer: Task<Void, Never>?
+    /// Reference box: re-arming the timer per mouse move must NOT
+    /// invalidate the view (that re-parsed the chapter on every move).
+    @State private var chromeTimer = TaskBox()
     @State private var bookmarkedHere = false
     @State private var activityMeter = ReadingActivityMeter()
     @AppStorage("reader.aloud.autonext") private var aloudAutoNext = false
     @AppStorage("reader.pdf.invert") private var pdfNightInverted = false
     @AppStorage("reader.pdf.twoup") private var pdfTwoUp = false
     @AppStorage("reader.traditional") private var traditionalChinese = false
-    @State private var traditionalCache: [Int: (chapter: EPUBChapter, plain: String?)] = [:]
+    @State private var traditionalCache = DictionaryBox<Int, (chapter: EPUBChapter, plain: String?)>()
     /// Per-chapter pre-translation activity for the TOC chips.
     @State private var pretransProgress: [Int: MacChapterTransStatus] = [:]
     /// Translated chapter titles for the bilingual TOC (kind `.title`).
@@ -186,12 +188,11 @@ struct MacReaderScreen: View {
         if chromeHidden {
             withAnimation(.easeInOut(duration: 0.25)) { chromeHidden = false }
         }
-        chromeTimer?.cancel()
-        chromeTimer = Task {
+        chromeTimer.replace(Task {
             try? await Task.sleep(for: .milliseconds(2500))
             guard !Task.isCancelled, !immersionBlocked else { return }
             withAnimation(.easeInOut(duration: 0.4)) { chromeHidden = true }
-        }
+        })
     }
 
     @ViewBuilder
@@ -423,7 +424,7 @@ struct MacReaderScreen: View {
             startPretranslation()
         }
         .onChange(of: traditionalChinese) { _, _ in
-            traditionalCache = [:]
+            traditionalCache.values = [:]
             inlineNotes = []
         }
         .onChange(of: readingMode) { _, newMode in
@@ -445,7 +446,7 @@ struct MacReaderScreen: View {
         }
         .onChange(of: immersionBlocked) { _, blocked in
             if blocked {
-                chromeTimer?.cancel()
+                chromeTimer.cancel()
                 if chromeHidden {
                     withAnimation(.easeInOut(duration: 0.25)) { chromeHidden = false }
                 }
@@ -455,7 +456,7 @@ struct MacReaderScreen: View {
         }
         .onDisappear {
             pretransTask?.cancel()
-            chromeTimer?.cancel()
+            chromeTimer.cancel()
         }
     }
 
@@ -1676,7 +1677,7 @@ struct MacReaderScreen: View {
 
     private func displayChapter(_ chapter: EPUBChapter) -> EPUBChapter {
         guard traditionalChinese else { return chapter }
-        if let cached = traditionalCache[currentChapterIndex] {
+        if let cached = traditionalCache.values[currentChapterIndex] {
             return cached.chapter
         }
         let converted = EPUBChapter(
@@ -1685,13 +1686,13 @@ struct MacReaderScreen: View {
             content: ChineseVariant.traditional(chapter.content)
         )
         let plain = currentChapterPlainText().map(ChineseVariant.traditional)
-        traditionalCache[currentChapterIndex] = (converted, plain)
+        traditionalCache.values[currentChapterIndex] = (converted, plain)
         return converted
     }
 
     private func displayChapterPlainText() -> String? {
         guard traditionalChinese else { return currentChapterPlainText() }
-        if let cached = traditionalCache[currentChapterIndex] {
+        if let cached = traditionalCache.values[currentChapterIndex] {
             return cached.plain
         }
         return currentChapterPlainText().map(ChineseVariant.traditional)
