@@ -89,6 +89,23 @@ enum AppStores {
             Chapter.self,
             Chunk.self,
         ])
-        return try ModelContainer(for: allModels, configurations: synced, local)
+        do {
+            return try ModelContainer(for: allModels, configurations: synced, local)
+        } catch where !ephemeral {
+            // CloudKit needs a provisioned iCloud entitlement; builds signed
+            // without one (CI, ad-hoc dev runs) land here. The same on-disk
+            // stores reopen local-only, so data survives and sync resumes on
+            // the next properly signed launch.
+            let localOnlySynced = ModelConfiguration(
+                "Synced",
+                schema: syncedSchema,
+                isStoredInMemoryOnly: false,
+                cloudKitDatabase: .none
+            )
+            return try ModelContainer(
+                for: allModels,
+                configurations: localOnlySynced, local
+            )
+        }
     }
 }
