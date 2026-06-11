@@ -228,8 +228,12 @@ git push -u origin main
 - [x] iOS 随身伴读对齐 02 原型：书库 / 阅读 / 卡片 + 朱 半屏 AI、「译」逐段双语、思维链接、今日伴读
 - [x] 预译 + 翻译持久化（设计第 2 轮）：Mac 左右分栏双语、本地译文缓存与可视化、☰ 章节目录面板
 - [x] 阅读 Agent v1：工具化现有能力 + 双路 agent loop（on-device guided generation / cloud JSON mode）、步骤轨迹、写操作确认
+- [x] Kimi Code（Anthropic 兼容）云端路径 + 接口标准切换
+- [ ] **ReaderMemory**（见 [docs/READER-MEMORY-PLAN.md](docs/READER-MEMORY-PLAN.md)）：跨书记忆 ingest/recall、升级思维链接、伴读 `recall_reader_memory`
+- [ ] **活思维链接**（见 [docs/LIBER-PORT-PLAN.md](docs/LIBER-PORT-PLAN.md) Wave 1）：语义呼应 + theme/why，对齐 Liber Echoes 的私人版
+- [ ] 伴读镜片（今译 / 辩难 / 文献）、Passkey + CloudKit 记忆同步（Phase 3）
 
-完整变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+完整变更记录见 [CHANGELOG.md](CHANGELOG.md)。架构与规划见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ---
 

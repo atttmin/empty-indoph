@@ -2,6 +2,11 @@
 
 本文档描述 Empty（空 · AI 伴读）的核心架构决策与数据流，供贡献者与未来维护参考。
 
+**演进规划**（实现前必读）：
+
+- [READER-MEMORY-PLAN.md](./READER-MEMORY-PLAN.md) — 读者记忆层、Agent 工具扩展、第三方 Memory 选型
+- [LIBER-PORT-PLAN.md](./LIBER-PORT-PLAN.md) — 从 Liber Web 借鉴的能力（活思维链接、镜片、卡片 fork 等）
+
 ---
 
 ## 设计原则

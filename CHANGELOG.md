@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- EPUB images in the paginated reader sometimes rendered blank: WebKit
+  column fragmentation and late image decode in the CSS-columns pager —
+  images no longer break across columns, decode eagerly on load, and
+  re-fit the kept page once assets settle
 - Mac 双语/导读 no longer snaps back toward the top while vertical
   scrolling and translations stream in: style updates now preserve the
   parallel-scroll anchor, inline note generation uses a plain-text AI path
