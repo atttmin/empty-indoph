@@ -1218,8 +1218,13 @@ struct MacReaderScreen: View {
             } catch {
                 // Remember the failure in memory only, so a flaky provider
                 // isn't re-polled on every page turn but a fresh visit
-                // retries.
+                // retries; tell the page to retire the "预译中" placeholder.
                 inlineCache[key] = ""
+                if readingMode == mode, currentChapterIndex == chapter {
+                    inlineNotes.append(
+                        InlineNotePaint(idx: paragraph.idx, text: "", failed: true)
+                    )
+                }
             }
         }
     }

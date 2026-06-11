@@ -48,10 +48,13 @@ nonisolated enum InlineNoteLayout: String {
 }
 
 /// One in-flow AI note (a paragraph's translation or 导读 paraphrase),
-/// keyed by the paragraph's index in the chapter DOM.
+/// keyed by the paragraph's index in the chapter DOM. `failed` marks a
+/// paragraph whose translation errored, so the page can retire its
+/// "预译中" placeholder instead of blinking forever.
 nonisolated struct InlineNotePaint: Codable, Equatable {
     var idx: Int
     var text: String
+    var failed: Bool = false
 }
 
 /// A paragraph on the currently visible page, reported by the web view so
@@ -1480,6 +1483,9 @@ extension ChapterWebView {
                 column-gap: 0 !important;
                 overflow-y: auto !important;
                 overflow-x: hidden !important;
+                /* Let the browser hold the reading line steady when cells
+                   above the viewport grow as translations stream in. */
+                overflow-anchor: auto;
             }
             .e-pair {
                 display: grid;
@@ -1488,6 +1494,9 @@ extension ChapterWebView {
                 padding: 14px 12px;
                 border-bottom: 1px dashed var(--e-line2);
                 border-radius: 10px;
+                /* The original column anchors the row height, so a
+                   translation filling in rarely moves anything. */
+                align-items: start;
             }
             .e-pair:hover { background: var(--e-acc-soft); }
             .e-pair .e-orig > p { margin: 0; }
@@ -1501,6 +1510,11 @@ extension ChapterWebView {
             .e-pending {
                 font-size: 0.78em;
                 color: var(--e-ink3);
+            }
+            .e-failed {
+                font-size: 0.74em;
+                color: var(--e-ink3);
+                opacity: 0.7;
             }
             .e-caret {
                 display: inline-block;
@@ -1548,6 +1562,9 @@ extension ChapterWebView {
         let layoutMode = 'paged';
         // idx -> 译文, kept across layout switches so pairs refill instantly.
         let translations = {};
+        // idx -> true when a paragraph's translation errored (so its pair
+        // shows a calm hint instead of blinking "预译中" forever).
+        let failedNotes = {};
         function pageWidth() { return window.innerWidth; }
         function readerPageCount() {
             if (layoutMode === 'parallel') {
@@ -1617,7 +1634,8 @@ extension ChapterWebView {
             const cap = layoutMode === 'parallel' ? 10 : 6;
             const items = [];
             visibleParagraphIndexes().forEach(function (idx) {
-                if (items.length >= cap || translations[idx] !== undefined) { return; }
+                if (items.length >= cap) { return; }
+                if (translations[idx] !== undefined || failedNotes[idx]) { return; }
                 const text = translatableText(paras[idx]);
                 if (!text) { return; }
                 items.push({ idx: idx, text: text });
@@ -1634,6 +1652,7 @@ extension ChapterWebView {
                     }
                 });
             translations = {};
+            failedNotes = {};
         }
         // ---- Parallel pairs (左右分栏) ----
         function pendingMarkup() {
@@ -1646,8 +1665,29 @@ extension ChapterWebView {
             if (!trans) { return; }
             if (translations[idx]) {
                 trans.textContent = translations[idx];
+            } else if (failedNotes[idx]) {
+                trans.innerHTML = '<span class="e-failed">· 译文暂不可用 ·</span>';
             } else {
                 trans.innerHTML = pendingMarkup();
+            }
+        }
+        // Run a layout-changing mutation while keeping the reader's current
+        // line visually fixed: in the vertical parallel view, growing a
+        // cell above the viewport would otherwise shove everything down and
+        // the page appears to jump. Pin the topmost visible paragraph by
+        // correcting scrollTop for the height the mutation added above it.
+        function withParallelAnchor(mutate) {
+            if (layoutMode !== 'parallel') { mutate(); return; }
+            const paras = readerParagraphs();
+            let anchor = null;
+            for (let i = 0; i < paras.length; i++) {
+                if (paras[i].getBoundingClientRect().bottom > 0) { anchor = paras[i]; break; }
+            }
+            const before = anchor ? anchor.getBoundingClientRect().top : 0;
+            mutate();
+            if (anchor) {
+                const delta = anchor.getBoundingClientRect().top - before;
+                if (Math.abs(delta) > 0.5) { document.body.scrollTop += delta; }
             }
         }
         function wrapPairs() {
@@ -1716,22 +1756,34 @@ extension ChapterWebView {
             const paras = readerParagraphs();
             const anchors = visibleParagraphIndexes();
             let stackedChange = false;
-            items.forEach(function (item) {
-                if (translations[item.idx]) { return; }
-                translations[item.idx] = item.text;
-                if (layoutMode === 'parallel') {
-                    renderPair(item.idx);
-                    return;
-                }
-                const p = paras[item.idx];
-                if (!p) { return; }
-                const div = document.createElement('div');
-                div.setAttribute('data-einject', inlineKind);
-                div.textContent = item.text;
-                p.insertAdjacentElement('afterend', div);
-                stackedChange = true;
+            // Parallel: fill the right-hand cells while pinning the reader's
+            // line, so a translation (or a failure) landing above the
+            // viewport never makes the page jump.
+            withParallelAnchor(function () {
+                items.forEach(function (item) {
+                    if (translations[item.idx]) { return; }
+                    if (item.failed) {
+                        if (failedNotes[item.idx]) { return; }
+                        failedNotes[item.idx] = true;
+                        if (layoutMode === 'parallel') { renderPair(item.idx); }
+                        return;
+                    }
+                    failedNotes[item.idx] = false;
+                    translations[item.idx] = item.text;
+                    if (layoutMode === 'parallel') {
+                        renderPair(item.idx);
+                        return;
+                    }
+                    const p = paras[item.idx];
+                    if (!p) { return; }
+                    const div = document.createElement('div');
+                    div.setAttribute('data-einject', inlineKind);
+                    div.textContent = item.text;
+                    p.insertAdjacentElement('afterend', div);
+                    stackedChange = true;
+                });
             });
-            if (!stackedChange) { return; }
+            if (layoutMode === 'parallel' || !stackedChange) { return; }
             // Stacked inserts reflow the columns; stay on the page where
             // the first visible paragraph now lives.
             requestAnimationFrame(function () {
@@ -1957,7 +2009,11 @@ extension ChapterWebView {
             const reflow = function () {
                 clearTimeout(settleTimer);
                 settleTimer = setTimeout(function () {
-                    readerGoTo(pageIndex, false);
+                    // Paged mode re-fits the kept page; the vertical
+                    // parallel view leaves scrollTop alone (native scroll
+                    // anchoring keeps the line steady — re-paging would
+                    // itself jump).
+                    if (layoutMode !== 'parallel') { readerGoTo(pageIndex, false); }
                 }, 80);
             };
             imgs.forEach(function (img) {
