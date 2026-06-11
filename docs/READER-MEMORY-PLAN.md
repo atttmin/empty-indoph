@@ -222,7 +222,7 @@ case saveMemory(title: String, body: String, tags: [String])
 
 ### Phase 1 — 本地 ReaderMemory（已实现）
 
-**状态**：`MemoryItem`、`ReaderMemory.syncFromReaderData()`、`recall_reader_memory`、`search_highlights`、`propose_memory`、旧问答压缩为 `theme`、`ThoughtLinkFinder` 记忆召回路、本地 `MemoryEmbedding` 持久语义路均已落地；后续只剩伴读自动提炼 / 镜片 / 同步阶段。
+**状态**：`MemoryItem`、`ReaderMemory.syncFromReaderData()`、`recall_reader_memory`、`search_highlights`、`propose_memory`、旧问答压缩为 `theme`、`ThoughtLinkFinder` 记忆召回路、本地 `MemoryEmbedding` 持久语义路均已落地；后续只剩自动结束时提炼主题与同步阶段。
 
 | 任务 ID | 内容 | 验收 |
 |---------|------|------|
@@ -251,7 +251,7 @@ case saveMemory(title: String, body: String, tags: [String])
 | 任务 ID | 内容 | 状态 |
 |---------|------|------|
 | P2-1 | `propose_memory` + `CompanionAction.saveMemory` | 已实现：不确认不入库，确认后写 `theme` |
-| P2-2 | 伴读结束时可选提炼主题（仅 cloud / 本机 FM） | 待做：目前由 agent 显式调用 `propose_memory` |
+| P2-2 | 伴读结束时可选提炼主题（仅 cloud / 本机 FM） | 已实现基础版：Mac / iOS 伴读可手动「提炼本轮主题」；自动结束时触发仍待做 |
 | P2-3 | 记忆压缩：旧 `companionQA` 合并为 `theme` | 已实现：手动压缩入口 + 旧问答退出 recall，仅保留派生 `theme` |
 
 ### Phase 3 — 跨设备同步与账号

@@ -1110,31 +1110,16 @@ struct ReadingView: View {
     // MARK: 双语对照 / 导读 (译 · 导)
 
     private var inlineNoteKind: InlineNoteKind {
-        switch readingMode {
-        case .original: .none
-        case .bilingual: .bilingual
-        case .companion: .companion
-        case .debate: .debate
-        case .sources: .sources
-        }
+        let mode = readingMode
+        return mode.lensMode?.inlineNoteKind ?? .none
     }
 
     private static func translationKind(for mode: IOSReadingMode) -> TranslationKind {
-        switch mode {
-        case .companion: .companion
-        case .debate: .debate
-        case .sources: .sources
-        default: .bilingual
-        }
+        mode.lensMode?.translationKind ?? .bilingual
     }
 
     private static func aiNoteKind(for mode: IOSReadingMode) -> AIInlineNoteKind {
-        switch mode {
-        case .companion: .companion
-        case .debate: .debate
-        case .sources: .sources
-        default: .bilingual
-        }
+        mode.lensMode?.aiNoteKind ?? .bilingual
     }
 
     /// Translates the visible paragraphs the chapter page reports, in
@@ -1276,17 +1261,17 @@ struct ReadingView: View {
     }
 
     private func pretranslate(from startChapter: Int) async {
+        let mode = readingMode
+        guard let lens = mode.lensMode else { return }
         let resolution = AIProviderRegistry.load().resolveUsableService(feature: .translate)
         guard resolution.service.availability.isAvailable else { return }
         // Whole-chapter pretranslation saturates the device when the
         // model runs locally — reading janks and the battery drains.
         // On-device stays per-viewport; only cloud providers cache ahead.
         guard !resolution.provider.isLocal else { return }
-        let mode = readingMode
-        let kind = Self.translationKind(for: mode)
-        let noteKind = Self.aiNoteKind(for: mode)
         let store = TranslationStore(modelContext: modelContext)
         let bookID = book.id
+        let language = LanguageSettings.effective(for: bookID)
         let chapters = (try? modelContext.fetch(
             FetchDescriptor<Chapter>(
                 predicate: #Predicate { $0.bookID == bookID },
@@ -1304,17 +1289,20 @@ struct ReadingView: View {
             // the cheap local lookups below re-check and backfill them.
             let paragraphs = TranslationStore.paragraphs(in: chapter.text)
             let missing = paragraphs.filter { paragraph in
-                if kind == .bilingual,
+                if lens.skipsTargetLanguageParagraphs,
                    LanguageDetect.matchesTarget(
                     textLanguage: LanguageDetect.sourceLanguage(of: paragraph, settings: language),
                     target: language.target
                 ) { return false }
                 return store.lookup(
-                    bookID: bookID, kind: kind, text: paragraph, target: language.target
+                    bookID: bookID,
+                    kind: lens.translationKind,
+                    text: paragraph,
+                    target: language.target
                 ) == nil
             }
             guard !missing.isEmpty else {
-                if kind == .bilingual, chapter.pretranslatedAt == nil {
+                if lens.pretranslatesTitles, chapter.pretranslatedAt == nil {
                     chapter.pretranslatedAt = Date()
                     try? modelContext.save()
                 }
@@ -1324,24 +1312,21 @@ struct ReadingView: View {
                 guard !Task.isCancelled, readingMode == mode else { return }
                 guard let note = try? await resolution.service.inlineNote(
                     for: paragraph,
-                    kind: noteKind,
+                    kind: lens.aiNoteKind,
                     targetLanguage: language.target
                     ).trimmingCharacters(in: .whitespacesAndNewlines)
                 else { continue }
-                let shouldStore = kind == .bilingual
-                    ? InlineNoteQuality.isWorthShowing(note: note, original: paragraph)
-                    : !note.isEmpty
-                guard shouldStore else { continue }
+                guard lens.shouldStore(note: note, original: paragraph) else { continue }
                 store.store(
                     note,
                     bookID: bookID,
                     chapterIndex: chapter.index,
-                    kind: kind,
+                    kind: lens.translationKind,
                     text: paragraph,
                     target: language.target
                 )
             }
-            if kind == .bilingual {
+            if lens.pretranslatesTitles {
                 chapter.pretranslatedAt = Date()
                 try? modelContext.save()
             }

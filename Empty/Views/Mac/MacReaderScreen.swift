@@ -901,11 +901,11 @@ struct MacReaderScreen: View {
     private var modeGuideBanner: some View {
         Group {
             if isGuideLoading {
-                ProgressView(readingMode == .bilingual ? "生成双语对照…" : "生成\(inlineNoteKind.label)…")
+                ProgressView(readingMode.lensMode?.guideLoadingText ?? "生成导读…")
                     .padding(.horizontal, 24)
                     .padding(.vertical, 10)
             } else if !modeGuideText.isEmpty {
-                ZhupiCallout(title: Self.translationKind(for: readingMode) == .bilingual ? "今译" : inlineNoteKind.label) {
+                ZhupiCallout(title: readingMode.lensMode?.guideTitle ?? inlineNoteKind.label) {
                     Text(modeGuideText)
                         .font(.system(size: 13.5))
                         .lineSpacing(6)
@@ -1323,25 +1323,15 @@ struct MacReaderScreen: View {
     }
 
     private var translationKind: TranslationKind {
-        Self.translationKind(for: readingMode)
+        readingMode.lensMode?.translationKind ?? .bilingual
     }
 
     private static func translationKind(for mode: MacReadingMode) -> TranslationKind {
-        switch mode {
-        case .companion: .companion
-        case .debate: .debate
-        case .sources: .sources
-        default: .bilingual
-        }
+        mode.lensMode?.translationKind ?? .bilingual
     }
 
     private static func aiNoteKind(for mode: MacReadingMode) -> AIInlineNoteKind {
-        switch mode {
-        case .companion: .companion
-        case .debate: .debate
-        case .sources: .sources
-        default: .bilingual
-        }
+        mode.lensMode?.aiNoteKind ?? .bilingual
     }
 
     /// Called whenever the chapter page reports the paragraphs the reader
@@ -1478,6 +1468,7 @@ struct MacReaderScreen: View {
     }
 
     private func pretranslate(from startChapter: Int) async {
+        guard let lens = readingMode.lensMode else { return }
         let resolution = AIProviderRegistry.load().resolveUsableService(feature: .translate)
         guard resolution.service.availability.isAvailable else { return }
         // Whole-chapter pretranslation saturates the machine when the
@@ -1485,8 +1476,6 @@ struct MacReaderScreen: View {
         // per-viewport; only cloud providers cache ahead.
         guard !resolution.provider.isLocal else { return }
         let mode = readingMode
-        let kind = Self.translationKind(for: mode)
-        let noteKind = Self.aiNoteKind(for: mode)
         let store = TranslationStore(modelContext: modelContext)
         let bookID = book.id
         let language = LanguageSettings.effective(for: bookID)
@@ -1497,7 +1486,7 @@ struct MacReaderScreen: View {
             )
         )) ?? []
 
-        if kind == .bilingual {
+        if lens.pretranslatesTitles {
             // Chapter titles first — they make the TOC bilingual and cost
             // almost nothing.
             for chapter in chapters.prefix(50) {
@@ -1534,7 +1523,7 @@ struct MacReaderScreen: View {
         let window = chapters.filter {
             $0.index >= startChapter && $0.index < startChapter + 3
         }
-        if kind == .bilingual {
+        if lens.pretranslatesTitles {
             for chapter in window where chapter.pretranslatedAt == nil {
                 pretransProgress[chapter.index] = .queued
             }
@@ -1546,17 +1535,20 @@ struct MacReaderScreen: View {
             // the cheap local lookups below re-check and backfill them.
             let paragraphs = TranslationStore.paragraphs(in: chapter.text)
             let missing = paragraphs.filter { paragraph in
-                if kind == .bilingual,
+                if lens.skipsTargetLanguageParagraphs,
                    LanguageDetect.matchesTarget(
                     textLanguage: LanguageDetect.sourceLanguage(of: paragraph, settings: language),
                     target: language.target
                    ) { return false }
                 return store.lookup(
-                    bookID: bookID, kind: kind, text: paragraph, target: language.target
+                    bookID: bookID,
+                    kind: lens.translationKind,
+                    text: paragraph,
+                    target: language.target
                 ) == nil
             }
             guard !missing.isEmpty else {
-                if kind == .bilingual, chapter.pretranslatedAt == nil {
+                if lens.pretranslatesTitles, chapter.pretranslatedAt == nil {
                     chapter.pretranslatedAt = Date()
                     try? modelContext.save()
                 }
@@ -1564,37 +1556,34 @@ struct MacReaderScreen: View {
                 continue
             }
             var done = paragraphs.count - missing.count
-            if kind == .bilingual {
+            if lens.pretranslatesTitles {
                 pretransProgress[chapter.index] = .translating(done: done, total: paragraphs.count)
             }
             for paragraph in missing {
                 guard !Task.isCancelled, readingMode == mode else { return }
                 if let note = try? await resolution.service.inlineNote(
                     for: paragraph,
-                    kind: noteKind,
+                    kind: lens.aiNoteKind,
                     targetLanguage: language.target
                 ) {
                     let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let shouldStore = kind == .bilingual
-                        ? InlineNoteQuality.isWorthShowing(note: text, original: paragraph)
-                        : !text.isEmpty
-                    if shouldStore {
+                    if lens.shouldStore(note: text, original: paragraph) {
                         store.store(
                             text,
                             bookID: bookID,
                             chapterIndex: chapter.index,
-                            kind: kind,
+                            kind: lens.translationKind,
                             text: paragraph,
                             target: language.target
                         )
                     }
                 }
                 done += 1
-                if kind == .bilingual {
+                if lens.pretranslatesTitles {
                     pretransProgress[chapter.index] = .translating(done: done, total: paragraphs.count)
                 }
             }
-            if kind == .bilingual {
+            if lens.pretranslatesTitles {
                 chapter.pretranslatedAt = Date()
                 try? modelContext.save()
                 pretransProgress[chapter.index] = nil
@@ -1637,7 +1626,7 @@ struct MacReaderScreen: View {
     }
 
     private func loadModeGuide() async {
-        guard readingMode != .original else {
+        guard let lens = readingMode.lensMode else {
             modeGuideText = ""
             return
         }
@@ -1650,12 +1639,12 @@ struct MacReaderScreen: View {
             modeGuideText = try await AITransientRetry.run {
                 try await resolution.service.inlineNote(
                     for: clipped,
-                    kind: Self.aiNoteKind(for: readingMode),
+                    kind: lens.aiNoteKind,
                     targetLanguage: LanguageSettings.effective(for: book.id).target
                 )
             }
         } catch {
-            modeGuideText = "\(inlineNoteKind.label)暂不可用 — \(error.localizedDescription)"
+            modeGuideText = "\(lens.guideTitle)暂不可用 — \(error.localizedDescription)"
         }
     }
 

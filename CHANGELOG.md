@@ -87,6 +87,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   companion Q&A into confirmed `theme` memories and removes the old Q&A
   rows from recall so long-term memory stays compact.
 
+- Added a manual “提炼本轮主题” action in both companion UIs; it drafts a
+  confirmed `theme` memory from recent Q&A turns without silently writing
+  anything to ReaderMemory.
+- Extended cloud pre-warming beyond bilingual text: 导读 / 辩难 / 文献 now
+  cache ahead too, and the Mac guide banner uses the mode-specific inline
+  note path instead of a generic chapter summary.
+
 - 语言设置 (per the 语言设置原型 design): a global目标语言 (简中/繁中/
   English/日本語) that 译文、释义、朱的回答 all follow, with 作用范围 rows
   to fix 释义 or 朱的回答 to a different language. 源语言 defaults to
