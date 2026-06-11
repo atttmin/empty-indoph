@@ -235,7 +235,7 @@ git push -u origin main
 - [x] EPUB 渲染线从 WebView 迁移到原生 SwiftUI：块模型解析、精确高亮 / 选区、跨段选取、高亮批注与精确跳回
 - [x] **ReaderMemory Phase 1/2 + 1b 基础版**（见 [docs/READER-MEMORY-PLAN.md](docs/READER-MEMORY-PLAN.md)）：跨书记忆 ingest/recall、伴读 `recall_reader_memory`、`propose_memory` 确认写入、本地 `MemoryEmbedding` 持久语义路、旧问答压缩为 `theme`、思维链接走记忆召回路
 - [x] **活思维链接基础升级**（见 [docs/LIBER-PORT-PLAN.md](docs/LIBER-PORT-PLAN.md) Wave 1）：链接卡 / 主题记忆可参与 `ThoughtLinkFinder`，AI theme/why 仍按需生成
-- [ ] Passkey + CloudKit 记忆同步
+- [ ] 可选 Passkey 账号体系 / Liber 互通（CloudKit reader-data sync 已启用）
 
 完整变更记录见 [CHANGELOG.md](CHANGELOG.md)。架构与规划见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

@@ -24,6 +24,14 @@ struct PersistenceTests {
         #expect(try context.fetchCount(FetchDescriptor<Chapter>()) == 1)
     }
 
+
+    @Test func memoryModelsStayInTheirIntendedStores() {
+        #expect(AppStores.placement(for: MemoryItem.self) == .synced)
+        #expect(AppStores.placement(for: MemoryEmbedding.self) == .local)
+        #expect(AppStores.placement(for: Chapter.self) == .local)
+        #expect(AppStores.placement(for: Book.self) == .synced)
+    }
+
     @Test func deletingBookCascadesToHighlightsAndSessions() throws {
         let container = try AppStores.makeContainer(ephemeral: true)
         let context = container.mainContext

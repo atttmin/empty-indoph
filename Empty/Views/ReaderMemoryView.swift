@@ -87,9 +87,11 @@ struct ReaderMemoryView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("⚲ 读者记忆")
                     .font(.system(size: 17, weight: .black, design: .serif))
-                    .foregroundStyle(palette.ink)
                 Text("\(visibleItems.count) 条 · 越读越懂你")
                     .font(.system(size: 11))
+                    .foregroundStyle(palette.ink3)
+                Text("短摘要随 CloudKit 同步；语义向量仅留在本机。")
+                    .font(.system(size: 10.5))
                     .foregroundStyle(palette.ink3)
             }
             Spacer()

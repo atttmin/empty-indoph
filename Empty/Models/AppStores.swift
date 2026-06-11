@@ -46,6 +46,25 @@ enum AppStores {
         MemoryEmbedding.self,
     ])
 
+    enum StorePlacement {
+        case synced
+        case local
+    }
+
+    static func placement(for model: Any.Type) -> StorePlacement? {
+        switch model {
+        case is Book.Type, is Highlight.Type, is ReadingSession.Type,
+             is VocabEntry.Type, is StudyCardEntry.Type, is Bookmark.Type,
+             is MemoryItem.Type:
+            .synced
+        case is Chapter.Type, is Chunk.Type, is ParagraphTranslation.Type,
+             is MemoryEmbedding.Type:
+            .local
+        default:
+            nil
+        }
+    }
+
     /// - Parameter ephemeral: throwaway per-container stores for tests and
     ///   previews. Not `isStoredInMemoryOnly`: that backs every store with
     ///   the same `/dev/null` pseudo-file, and concurrent containers
