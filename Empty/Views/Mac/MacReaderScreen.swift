@@ -51,6 +51,7 @@ struct MacReaderScreen: View {
     @AppStorage("reader.lineSpacing") private var lineSpacing: Double = 1.8
     @AppStorage("reader.theme") private var readerTheme: ReaderTheme = .paper
     @AppStorage("reader.font") private var readerFont: ReaderFont = .serif
+    @AppStorage("reader.pageturn.mac") private var pageTurn: ReaderPageTurn = .paged
     @State private var pendingSelection: ReaderSelection?
     @State private var chapterHighlights: [HighlightPaint] = []
     @State private var showChapterSelection = false
@@ -74,6 +75,7 @@ struct MacReaderScreen: View {
     @State private var chapterPageInfo: (page: Int, count: Int)?
     @State private var inlineNotes: [InlineNotePaint] = []
     @State private var inlineCache: [String: String] = [:]
+    @State private var inlineRetryCounts: [String: Int] = [:]
     @State private var inlineInFlight: Set<String> = []
     @State private var inlineAIUnavailable = false
     @State private var isTocOpen = false
@@ -238,31 +240,60 @@ struct MacReaderScreen: View {
 
                     VStack(spacing: 0) {
                         ZStack(alignment: .bottom) {
-                            NativeChapterReaderView(
-                                chapter: epub.chapters[currentChapterIndex],
-                                basePath: epub.basePath,
-                                fontSize: fontSize,
-                                lineSpacing: lineSpacing,
-                                landing: chapterLanding,
-                                resumeUTF16Offset: resumeUTF16Offset,
-                                chapterPlainText: currentChapterPlainText(),
-                                highlights: chapterHighlights,
-                                inlineMode: inlineNoteKind,
-                                inlineLayout: readingMode == .bilingual ? .parallel : .stacked,
-                                inlineNotes: inlineNotes,
-                                appearance: ReaderAppearance(theme: readerTheme, font: readerFont),
-                                selectionActive: pendingSelection != nil,
-                                onTap: { pendingSelection = nil },
-                                onChapterBoundary: { direction in
-                                    crossChapterBoundary(direction, chapterCount: epub.chapters.count)
-                                },
-                                onSelectionChange: { applySelection($0) },
-                                onPositionChange: { updateUTF16Offset(domPrefix: $0) },
-                                onVisibleParagraphs: { handleVisibleParagraphs($0) },
-                                onPageInfo: { page, count in
-                                    chapterPageInfo = (page: page, count: count)
+                            Group {
+                                if pageTurn == .paged {
+                                    MacPagedChapterReaderView(
+                                        chapter: epub.chapters[currentChapterIndex],
+                                        basePath: epub.basePath,
+                                        fontSize: fontSize,
+                                        lineSpacing: lineSpacing,
+                                        landing: chapterLanding,
+                                        resumeUTF16Offset: resumeUTF16Offset,
+                                        chapterPlainText: currentChapterPlainText(),
+                                        highlights: chapterHighlights,
+                                        inlineMode: inlineNoteKind,
+                                        inlineNotes: inlineNotes,
+                                        appearance: ReaderAppearance(theme: readerTheme, font: readerFont),
+                                        selectionActive: pendingSelection != nil,
+                                        onTap: { pendingSelection = nil },
+                                        onChapterBoundary: { direction in
+                                            crossChapterBoundary(direction, chapterCount: epub.chapters.count)
+                                        },
+                                        onSelectionChange: { applySelection($0) },
+                                        onPositionChange: { updateUTF16Offset(domPrefix: $0) },
+                                        onVisibleParagraphs: { handleVisibleParagraphs($0) },
+                                        onPageInfo: { page, count in
+                                            chapterPageInfo = (page: page, count: count)
+                                        }
+                                    )
+                                } else {
+                                    NativeChapterReaderView(
+                                        chapter: epub.chapters[currentChapterIndex],
+                                        basePath: epub.basePath,
+                                        fontSize: fontSize,
+                                        lineSpacing: lineSpacing,
+                                        landing: chapterLanding,
+                                        resumeUTF16Offset: resumeUTF16Offset,
+                                        chapterPlainText: currentChapterPlainText(),
+                                        highlights: chapterHighlights,
+                                        inlineMode: inlineNoteKind,
+                                        inlineLayout: readingMode == .bilingual ? .parallel : .stacked,
+                                        inlineNotes: inlineNotes,
+                                        appearance: ReaderAppearance(theme: readerTheme, font: readerFont),
+                                        selectionActive: pendingSelection != nil,
+                                        onTap: { pendingSelection = nil },
+                                        onChapterBoundary: { direction in
+                                            crossChapterBoundary(direction, chapterCount: epub.chapters.count)
+                                        },
+                                        onSelectionChange: { applySelection($0) },
+                                        onPositionChange: { updateUTF16Offset(domPrefix: $0) },
+                                        onVisibleParagraphs: { handleVisibleParagraphs($0) },
+                                        onPageInfo: { page, count in
+                                            chapterPageInfo = (page: page, count: count)
+                                        }
+                                    )
                                 }
-                            )
+                            }
                             .id(currentChapterIndex)
 
                             selectionOverlay
@@ -307,7 +338,8 @@ struct MacReaderScreen: View {
                 fontSize: $fontSize,
                 lineSpacing: $lineSpacing,
                 theme: $readerTheme,
-                font: $readerFont
+                font: $readerFont,
+                pageTurn: $pageTurn
             )
             .frame(minWidth: 340, minHeight: 460)
         }
@@ -494,7 +526,8 @@ struct MacReaderScreen: View {
                     fontSize: $fontSize,
                     lineSpacing: $lineSpacing,
                     theme: $readerTheme,
-                    font: $readerFont
+                    font: $readerFont,
+                    pageTurn: $pageTurn
                 )
                 .frame(minWidth: 340, minHeight: 460)
             }
@@ -617,6 +650,7 @@ struct MacReaderScreen: View {
 
             pillButton("目录", identifier: "reader.chapterList") { showChapterList = true }
             pillButton("高亮", identifier: "reader.highlights") { showHighlights = true }
+            pillButton("设置", identifier: "reader.settings") { showSettings = true }
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -913,6 +947,7 @@ struct MacReaderScreen: View {
             .buttonStyle(.plain)
 
             pillButton("高亮", identifier: "reader.highlights") { showHighlights = true }
+            pillButton("设置", identifier: "reader.settings") { showSettings = true }
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -1201,9 +1236,16 @@ struct MacReaderScreen: View {
         for paragraph in paragraphs {
             let key = inlineKey(mode, chapter, paragraph.idx)
             if let cached = inlineCache[key] {
-                if !cached.isEmpty,
-                   !inlineNotes.contains(where: { $0.idx == paragraph.idx }) {
-                    inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: cached))
+                if !cached.isEmpty {
+                    if !inlineNotes.contains(where: { $0.idx == paragraph.idx }) {
+                        inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: cached))
+                    }
+                } else if inlineRetryCounts[key, default: 0] < 3,
+                          !inlineInFlight.contains(key) {
+                    // An empty/errored result is not a verdict — retry the
+                    // paragraph while it's on screen (capped per visit).
+                    inlineInFlight.insert(key)
+                    missing.append(paragraph)
                 }
             } else if let persisted = store.lookup(
                 bookID: book.id,
@@ -1259,8 +1301,11 @@ struct MacReaderScreen: View {
                         text: paragraph.text
                     )
                     cacheStatsTick += 1
+                } else {
+                    inlineRetryCounts[key, default: 0] += 1
                 }
                 if readingMode == mode, currentChapterIndex == chapter, !text.isEmpty {
+                    inlineNotes.removeAll { $0.idx == paragraph.idx }
                     inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
                 }
             } catch {
@@ -1270,7 +1315,9 @@ struct MacReaderScreen: View {
                 // permanent failure marker.
                 guard !AITransientRetry.isTransient(error) else { continue }
                 inlineCache[key] = ""
+                inlineRetryCounts[key, default: 0] += 1
                 if readingMode == mode, currentChapterIndex == chapter {
+                    inlineNotes.removeAll { $0.idx == paragraph.idx }
                     inlineNotes.append(
                         InlineNotePaint(idx: paragraph.idx, text: "", failed: true)
                     )
@@ -1340,24 +1387,30 @@ struct MacReaderScreen: View {
         }
         for chapter in window {
             guard !Task.isCancelled, readingMode == .bilingual else { return }
-            guard chapter.pretranslatedAt == nil else { continue }
+            // Even chapters stamped pretranslated can carry holes (a
+            // provider hiccup skipped paragraphs in an earlier pass) —
+            // the cheap local lookups below re-check and backfill them.
             let paragraphs = TranslationStore.paragraphs(in: chapter.text)
-            guard !paragraphs.isEmpty else {
-                chapter.pretranslatedAt = Date()
-                try? modelContext.save()
+            let missing = paragraphs.filter {
+                store.lookup(bookID: bookID, kind: .bilingual, text: $0) == nil
+            }
+            guard !missing.isEmpty else {
+                if chapter.pretranslatedAt == nil {
+                    chapter.pretranslatedAt = Date()
+                    try? modelContext.save()
+                }
+                pretransProgress[chapter.index] = nil
                 continue
             }
-            var done = 0
-            pretransProgress[chapter.index] = .translating(done: 0, total: paragraphs.count)
-            for paragraph in paragraphs {
+            var done = paragraphs.count - missing.count
+            pretransProgress[chapter.index] = .translating(done: done, total: paragraphs.count)
+            for paragraph in missing {
                 guard !Task.isCancelled, readingMode == .bilingual else { return }
-                if store.lookup(bookID: bookID, kind: .bilingual, text: paragraph) == nil {
-                    guard let text = try? await resolution.service.inlineNote(
-                        for: paragraph,
-                        kind: .bilingual
-                    ).trimmingCharacters(in: .whitespacesAndNewlines)
-                    else { continue }
-                    guard !text.isEmpty else { continue }
+                if let text = try? await resolution.service.inlineNote(
+                    for: paragraph,
+                    kind: .bilingual
+                ).trimmingCharacters(in: .whitespacesAndNewlines),
+                   !text.isEmpty {
                     store.store(
                         text,
                         bookID: bookID,

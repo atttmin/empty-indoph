@@ -135,10 +135,11 @@ struct ReadingView: View {
     @AppStorage("reader.lineSpacing") private var lineSpacing: Double = 1.6
     @AppStorage("reader.theme") private var readerTheme: ReaderTheme = .paper
     @AppStorage("reader.font") private var readerFont: ReaderFont = .serif
-    @AppStorage("reader.pageturn.ios") private var pageTurn: ReaderPageTurn = .paged
+    @AppStorage("reader.pageturn.ios") private var pageTurn: ReaderPageTurn = .scroll
     @AppStorage("reader.mode.ios") private var readingMode: IOSReadingMode = .original
     @State private var inlineNotes: [InlineNotePaint] = []
     @State private var inlineCache: [Int: String] = [:]
+    @State private var inlineRetryCounts: [Int: Int] = [:]
     @State private var inlineInFlight: Set<Int> = []
     @State private var pretransTask: Task<Void, Never>?
     @State private var marginNote: String?
@@ -385,6 +386,7 @@ struct ReadingView: View {
             // per-mode-agnostic by key, so it resets with the mode.
             inlineNotes = []
             inlineCache = [:]
+            inlineRetryCounts = [:]
             inlineInFlight = []
             startPretranslation()
         }
@@ -952,9 +954,16 @@ struct ReadingView: View {
         for paragraph in paragraphs {
             let key = inlineNoteKey(chapter: chapter, idx: paragraph.idx)
             if let cached = inlineCache[key] {
-                if !cached.isEmpty,
-                   !inlineNotes.contains(where: { $0.idx == paragraph.idx }) {
-                    inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: cached))
+                if !cached.isEmpty {
+                    if !inlineNotes.contains(where: { $0.idx == paragraph.idx }) {
+                        inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: cached))
+                    }
+                } else if inlineRetryCounts[key, default: 0] < 3,
+                          !inlineInFlight.contains(key) {
+                    // An empty/errored result is not a verdict — retry the
+                    // paragraph while it's on screen (capped per visit).
+                    inlineInFlight.insert(key)
+                    missing.append(paragraph)
                 }
             } else if let persisted = store.lookup(
                 bookID: book.id,
@@ -1013,7 +1022,11 @@ struct ReadingView: View {
                 }
                 guard readingMode == mode else { continue }
                 inlineCache[key] = text
+                if text.isEmpty {
+                    inlineRetryCounts[key, default: 0] += 1
+                }
                 if currentChapterIndex == chapter, !text.isEmpty {
+                    inlineNotes.removeAll { $0.idx == paragraph.idx }
                     inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
                 }
             } catch {
@@ -1023,6 +1036,13 @@ struct ReadingView: View {
                 guard !AITransientRetry.isTransient(error) else { continue }
                 if readingMode == mode {
                     inlineCache[key] = ""
+                    inlineRetryCounts[key, default: 0] += 1
+                    if currentChapterIndex == chapter {
+                        inlineNotes.removeAll { $0.idx == paragraph.idx }
+                        inlineNotes.append(
+                            InlineNotePaint(idx: paragraph.idx, text: "", failed: true)
+                        )
+                    }
                 }
             }
         }
@@ -1061,18 +1081,22 @@ struct ReadingView: View {
         }
         for chapter in window {
             guard !Task.isCancelled, readingMode == .bilingual else { return }
-            guard chapter.pretranslatedAt == nil else { continue }
+            // Even chapters stamped pretranslated can carry holes (a
+            // provider hiccup skipped paragraphs in an earlier pass) —
+            // the cheap local lookups below re-check and backfill them.
             let paragraphs = TranslationStore.paragraphs(in: chapter.text)
-            guard !paragraphs.isEmpty else {
-                chapter.pretranslatedAt = Date()
-                try? modelContext.save()
+            let missing = paragraphs.filter {
+                store.lookup(bookID: bookID, kind: .bilingual, text: $0) == nil
+            }
+            guard !missing.isEmpty else {
+                if chapter.pretranslatedAt == nil {
+                    chapter.pretranslatedAt = Date()
+                    try? modelContext.save()
+                }
                 continue
             }
-            for paragraph in paragraphs {
+            for paragraph in missing {
                 guard !Task.isCancelled, readingMode == .bilingual else { return }
-                guard store.lookup(bookID: bookID, kind: .bilingual, text: paragraph) == nil else {
-                    continue
-                }
                 guard let text = try? await resolution.service.inlineNote(
                     for: paragraph,
                     kind: .bilingual

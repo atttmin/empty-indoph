@@ -2,17 +2,27 @@
 //  PagedChapterReaderView.swift
 //  Empty
 //
-//  微信读书-style horizontal paging for the iOS EPUB reader: the chapter
-//  lays out once into fixed-size TextKit pages (one NSTextStorage, one
-//  NSLayoutManager, one NSTextContainer per page), and the reader swipes
-//  or edge-taps between pages. Selection, highlights, 双语/导读 notes and
-//  position reporting ride the same chapter-offset pipeline as the
-//  scrolling reader.
+//  微信读书-style horizontal paging for the EPUB reader: the chapter lays
+//  out once into fixed-size TextKit pages (measured offscreen, one text
+//  container per page), and the reader swipes, edge-taps or arrow-keys
+//  between pages. Selection, highlights, 双语/导读 notes and position
+//  reporting ride the same chapter-offset pipeline as the scrolling
+//  reader. iOS pages with a TabView; macOS pages a single text view with
+//  click zones and keyboard navigation.
 //
 
-#if os(iOS)
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+private typealias PagedFont = UIFont
+private typealias PagedColor = UIColor
+private typealias PagedImage = UIImage
+#elseif canImport(AppKit)
+import AppKit
+private typealias PagedFont = NSFont
+private typealias PagedColor = NSColor
+private typealias PagedImage = NSImage
+#endif
 
 // MARK: - Composition
 
@@ -28,36 +38,45 @@ private struct PagedRun {
     var chapterRange: Range<Int>?
 }
 
+/// Page boundaries are measured ONCE with an offscreen layout manager;
+/// each visible page then gets its own independent UITextView over the
+/// page's substring. Sharing live text containers with SwiftUI-managed
+/// text views breaks as TabView creates and destroys pages.
 private final class PaginatedChapter {
     let storage: NSTextStorage
-    let layoutManager: NSLayoutManager
-    let containers: [NSTextContainer]
+    let pageRanges: [NSRange]
     let runs: [PagedRun]
     let pageSize: CGSize
     let version: Int
 
     init(
         storage: NSTextStorage,
-        layoutManager: NSLayoutManager,
-        containers: [NSTextContainer],
+        pageRanges: [NSRange],
         runs: [PagedRun],
         pageSize: CGSize,
         version: Int
     ) {
         self.storage = storage
-        self.layoutManager = layoutManager
-        self.containers = containers
+        self.pageRanges = pageRanges
         self.runs = runs
         self.pageSize = pageSize
         self.version = version
     }
 
-    var pageCount: Int { containers.count }
+    var pageCount: Int { pageRanges.count }
 
     func characterRange(forPage index: Int) -> NSRange {
-        guard containers.indices.contains(index) else { return NSRange(location: 0, length: 0) }
-        let glyphs = layoutManager.glyphRange(for: containers[index])
-        return layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        guard pageRanges.indices.contains(index) else { return NSRange(location: 0, length: 0) }
+        return pageRanges[index]
+    }
+
+    func pageText(_ index: Int) -> NSAttributedString {
+        let range = characterRange(forPage: index)
+        guard range.length > 0,
+              range.location + range.length <= storage.length else {
+            return NSAttributedString(string: " ")
+        }
+        return storage.attributedSubstring(from: range)
     }
 
     /// Chapter UTF-16 offset of the first mapped character on a page.
@@ -82,13 +101,12 @@ private final class PaginatedChapter {
         }), let chapterRange = run.chapterRange else { return nil }
         let delta = max(0, min(offset, chapterRange.upperBound) - chapterRange.lowerBound)
         let attrLocation = run.textLocation + delta
-        for index in containers.indices {
-            let pageRange = characterRange(forPage: index)
+        for (index, pageRange) in pageRanges.enumerated() {
             if attrLocation < pageRange.location + pageRange.length {
                 return index
             }
         }
-        return containers.indices.last
+        return pageRanges.indices.last
     }
 
     /// Paragraphs whose runs intersect the page.
@@ -141,26 +159,34 @@ private struct PageComposer {
         let (attributed, runs) = buildAttributed()
         paintHighlights(on: attributed, runs: runs)
 
-        let storage = NSTextStorage(attributedString: attributed)
+        // Offscreen measurement pass: page boundaries only.
+        let measureStorage = NSTextStorage(attributedString: attributed)
         let layoutManager = NSLayoutManager()
-        storage.addLayoutManager(layoutManager)
+        measureStorage.addLayoutManager(layoutManager)
 
-        var containers: [NSTextContainer] = []
+        var pageRanges: [NSRange] = []
         repeat {
             let container = NSTextContainer(size: pageSize)
             container.lineFragmentPadding = 0
             layoutManager.addTextContainer(container)
-            containers.append(container)
             let glyphRange = layoutManager.glyphRange(for: container)
+            let charRange = layoutManager.characterRange(
+                forGlyphRange: glyphRange,
+                actualGlyphRange: nil
+            )
+            pageRanges.append(charRange)
             if glyphRange.location + glyphRange.length >= layoutManager.numberOfGlyphs {
                 break
             }
-        } while containers.count < 1200
+        } while pageRanges.count < 1200
+
+        if pageRanges.isEmpty {
+            pageRanges = [NSRange(location: 0, length: attributed.length)]
+        }
 
         return PaginatedChapter(
-            storage: storage,
-            layoutManager: layoutManager,
-            containers: containers,
+            storage: NSTextStorage(attributedString: attributed),
+            pageRanges: pageRanges,
             runs: runs,
             pageSize: pageSize,
             version: version
@@ -169,21 +195,22 @@ private struct PageComposer {
 
     // MARK: Attributed text
 
-    private var inkPrimary: UIColor {
+    private var inkPrimary: PagedColor {
         let hexes = appearance.theme.inkHexes(baseIsDark: isDarkCanvas)
-        return UIColor(hex: hexes.primary)
+        return PagedColor(hex: hexes.primary)
     }
 
-    private var inkSecondary: UIColor {
+    private var inkSecondary: PagedColor {
         let hexes = appearance.theme.inkHexes(baseIsDark: isDarkCanvas)
-        return UIColor(hex: hexes.secondary)
+        return PagedColor(hex: hexes.secondary)
     }
 
-    private var accent: UIColor {
-        UIColor(hex: appearance.theme.isDarkCanvas(baseIsDark: isDarkCanvas) ? 0xD86B47 : 0xB5482A)
+    private var accent: PagedColor {
+        PagedColor(hex: appearance.theme.isDarkCanvas(baseIsDark: isDarkCanvas) ? 0xD86B47 : 0xB5482A)
     }
 
-    private func bodyFont(size: Double, bold: Bool = false) -> UIFont {
+    private func bodyFont(size: Double, bold: Bool = false) -> PagedFont {
+        #if canImport(UIKit)
         if let family = appearance.font.familyName {
             var descriptor = UIFontDescriptor(fontAttributes: [.family: family])
             if bold, let boldDescriptor = descriptor.withSymbolicTraits(.traitBold) {
@@ -198,6 +225,25 @@ private struct PageComposer {
             return base
         }
         return UIFont(descriptor: descriptor, size: size)
+        #else
+        if let family = appearance.font.familyName {
+            var descriptor = NSFontDescriptor(fontAttributes: [.family: family])
+            if bold {
+                descriptor = descriptor.withSymbolicTraits(.bold)
+            }
+            if let font = NSFont(descriptor: descriptor, size: size),
+               font.familyName == family {
+                return font
+            }
+        }
+        let base = NSFont.systemFont(ofSize: size, weight: bold ? .bold : .regular)
+        guard appearance.font.usesSerifDesign,
+              let descriptor = base.fontDescriptor.withDesign(.serif),
+              let font = NSFont(descriptor: descriptor, size: size) else {
+            return base
+        }
+        return font
+        #endif
     }
 
     private func paragraphStyle(
@@ -238,23 +284,38 @@ private struct PageComposer {
         }
 
         func appendNote(for paragraph: ReaderParagraph) {
-            guard inlineMode != .none,
-                  let note = inlineNotes.first(where: { $0.idx == paragraph.idx }),
-                  !note.failed,
-                  !note.text.isEmpty else { return }
+            guard inlineMode != .none else { return }
+            let note = inlineNotes.first(where: { $0.idx == paragraph.idx })
             let label = inlineMode == .bilingual ? "译" : "导读"
+
+            // Untranslated paragraphs show a quiet pending/failed line
+            // instead of silently nothing — the retry pipeline fills it
+            // in and the page re-anchors in place.
+            let body: String
+            let bodyColor: PagedColor
+            if let note, !note.failed, !note.text.isEmpty {
+                body = note.text
+                bodyColor = inkSecondary
+            } else if let note, note.failed {
+                body = "暂不可用，将自动重试。"
+                bodyColor = inkSecondary.withAlphaComponent(0.7)
+            } else {
+                body = "⟳ 生成中…"
+                bodyColor = inkSecondary.withAlphaComponent(0.55)
+            }
+
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: bodyFont(size: max(13, fontSize - 2.5)),
-                .foregroundColor: inkSecondary,
+                .foregroundColor: bodyColor,
                 .paragraphStyle: paragraphStyle(spacing: fontSize * 0.7, headIndent: 14),
             ]
             let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: max(10, fontSize - 7), weight: .bold),
+                .font: PagedFont.systemFont(ofSize: max(10, fontSize - 7), weight: .bold),
                 .foregroundColor: accent,
                 .paragraphStyle: paragraphStyle(spacing: fontSize * 0.7, headIndent: 14),
             ]
             result.append(NSAttributedString(string: "\(label) · ", attributes: labelAttributes))
-            result.append(NSAttributedString(string: note.text + "\n", attributes: attributes))
+            result.append(NSAttributedString(string: body + "\n", attributes: attributes))
         }
 
         for block in document.blocks {
@@ -307,7 +368,7 @@ private struct PageComposer {
 
             case .code(_, let text):
                 appendBlockText(block, text: text, attributes: [
-                    .font: UIFont.monospacedSystemFont(ofSize: max(12, fontSize - 3), weight: .regular),
+                    .font: PagedFont.monospacedSystemFont(ofSize: max(12, fontSize - 3), weight: .regular),
                     .foregroundColor: inkPrimary,
                     .paragraphStyle: paragraphStyle(spacing: fontSize * 0.62, headIndent: 8),
                 ])
@@ -320,7 +381,7 @@ private struct PageComposer {
                 result.append(NSAttributedString(
                     string: text + "\n",
                     attributes: [
-                        .font: UIFont.monospacedSystemFont(ofSize: max(11, fontSize - 4), weight: .regular),
+                        .font: PagedFont.monospacedSystemFont(ofSize: max(11, fontSize - 4), weight: .regular),
                         .foregroundColor: inkSecondary,
                         .paragraphStyle: paragraphStyle(spacing: fontSize * 0.62, headIndent: 8),
                     ]
@@ -380,7 +441,7 @@ private struct PageComposer {
         }
     }
 
-    private func loadImage(source: String) -> UIImage? {
+    private func loadImage(source: String) -> PagedImage? {
         let cleaned = source.components(separatedBy: "#").first ?? source
         let chapterDirectory = basePath
             .appendingPathComponent(chapterHref)
@@ -391,11 +452,11 @@ private struct PageComposer {
         } else {
             url = chapterDirectory.appendingPathComponent(cleaned)
         }
-        return UIImage(contentsOfFile: url.path)
+        return PagedImage(contentsOfFile: url.path)
     }
 
     private func paintHighlights(on attributed: NSMutableAttributedString, runs: [PagedRun]) {
-        let gold = UIColor(hex: 0xDEB248).withAlphaComponent(
+        let gold = PagedColor(hex: 0xDEB248).withAlphaComponent(
             appearance.theme.isDarkCanvas(baseIsDark: isDarkCanvas) ? 0.28 : 0.4
         )
         for highlight in highlights {
@@ -423,8 +484,9 @@ private struct PageComposer {
     }
 }
 
-// MARK: - SwiftUI view
+// MARK: - SwiftUI view (iOS pager)
 
+#if os(iOS)
 struct PagedChapterReaderView: View {
     let chapter: EPUBChapter
     let basePath: URL
@@ -523,10 +585,11 @@ struct PagedChapterReaderView: View {
                     TabView(selection: $pageIndex) {
                         ForEach(0..<paginated.pageCount, id: \.self) { index in
                             PageTextView(
-                                paginated: paginated,
-                                pageIndex: index,
+                                text: paginated.pageText(index),
+                                globalLocation: paginated.characterRange(forPage: index).location,
                                 clearSelection: !selectionActive,
-                                onSelectionChange: { handleSelection($0) }
+                                onSelectionChange: { handleSelection($0) },
+                                onTapAt: { handleTap(fraction: $0) }
                             )
                             .frame(width: textSize.width, height: textSize.height)
                             .padding(.horizontal, horizontalInset)
@@ -540,7 +603,7 @@ struct PagedChapterReaderView: View {
             }
             .contentShape(Rectangle())
             .onTapGesture { location in
-                handleTap(at: location, width: geometry.size.width)
+                handleTap(fraction: geometry.size.width > 0 ? location.x / geometry.size.width : 0.5)
             }
             .onAppear {
                 recomposeIfNeeded(textSize: textSize)
@@ -560,14 +623,14 @@ struct PagedChapterReaderView: View {
     /// 微信读书-style tap navigation: left quarter back, right quarter
     /// forward, middle toggles the chrome. A pending selection makes the
     /// first tap dismiss it instead of turning a page.
-    private func handleTap(at location: CGPoint, width: CGFloat) {
+    private func handleTap(fraction: CGFloat) {
         if selectionActive {
             onSelectionChange(nil)
             return
         }
-        if location.x < width * 0.26 {
+        if fraction < 0.26 {
             turnPage(-1)
-        } else if location.x > width * 0.74 {
+        } else if fraction > 0.74 {
             turnPage(1)
         } else {
             onSelectionChange(nil)
@@ -693,30 +756,59 @@ struct PagedChapterReaderView: View {
 // MARK: - Page text view
 
 private struct PageTextView: UIViewRepresentable {
-    let paginated: PaginatedChapter
-    let pageIndex: Int
+    /// The page's own slice of the chapter — every page view is fully
+    /// independent, so TabView can create/destroy pages freely.
+    let text: NSAttributedString
+    /// Where this page starts in the composed chapter string; selection
+    /// ranges are reported back in chapter-storage coordinates.
+    let globalLocation: Int
     let clearSelection: Bool
     let onSelectionChange: (NSRange?) -> Void
+    /// Tap location as an x-fraction of the page width (page turning).
+    let onTapAt: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSelectionChange: onSelectionChange)
+        Coordinator(
+            globalLocation: globalLocation,
+            onSelectionChange: onSelectionChange,
+            onTapAt: onTapAt
+        )
     }
 
     func makeUIView(context: Context) -> UITextView {
-        let container = paginated.containers[pageIndex]
-        let textView = UITextView(frame: .zero, textContainer: container)
+        let textView = UITextView(frame: .zero)
         textView.backgroundColor = .clear
         textView.isEditable = false
         textView.isSelectable = true
         textView.isScrollEnabled = false
         textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
         textView.dataDetectorTypes = []
+        textView.clipsToBounds = true
         textView.delegate = context.coordinator
+        textView.attributedText = text
+
+        // UITextView's own recognizers swallow single taps, so page
+        // turning listens directly on the view; touches still reach the
+        // text interactions (long-press selection keeps working).
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        tap.cancelsTouchesInView = false
+        textView.addGestureRecognizer(tap)
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
+        context.coordinator.globalLocation = globalLocation
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onTapAt = onTapAt
+        if !textView.attributedText.isEqual(to: text) {
+            context.coordinator.programmatic = true
+            textView.attributedText = text
+            context.coordinator.programmatic = false
+        }
         if clearSelection, textView.selectedRange.length > 0 {
             context.coordinator.programmatic = true
             textView.selectedRange = NSRange(location: NSNotFound, length: 0)
@@ -725,11 +817,19 @@ private struct PageTextView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
+        var globalLocation: Int
         var onSelectionChange: (NSRange?) -> Void
+        var onTapAt: (CGFloat) -> Void
         var programmatic = false
 
-        init(onSelectionChange: @escaping (NSRange?) -> Void) {
+        init(
+            globalLocation: Int,
+            onSelectionChange: @escaping (NSRange?) -> Void,
+            onTapAt: @escaping (CGFloat) -> Void
+        ) {
+            self.globalLocation = globalLocation
             self.onSelectionChange = onSelectionChange
+            self.onTapAt = onTapAt
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
@@ -739,12 +839,399 @@ private struct PageTextView: UIViewRepresentable {
                 onSelectionChange(nil)
                 return
             }
-            onSelectionChange(range)
+            onSelectionChange(NSRange(location: globalLocation + range.location, length: range.length))
+        }
+
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let view = recognizer.view, view.bounds.width > 0 else { return }
+            let fraction = recognizer.location(in: view).x / view.bounds.width
+            onTapAt(fraction)
         }
     }
 }
+#endif
 
-private extension UIColor {
+// MARK: - macOS pager
+
+#if os(macOS)
+struct MacPagedChapterReaderView: View {
+    let chapter: EPUBChapter
+    let basePath: URL
+    let fontSize: Double
+    let lineSpacing: Double
+    let landing: ChapterLanding
+    let resumeUTF16Offset: Int
+    let chapterPlainText: String?
+    let highlights: [HighlightPaint]
+    let inlineMode: InlineNoteKind
+    let inlineNotes: [InlineNotePaint]
+    var appearance: ReaderAppearance = ReaderAppearance()
+    var selectionActive: Bool = false
+    var onTap: () -> Void = {}
+    var onChapterBoundary: (PageTurnDirection) -> Void = { _ in }
+    var onSelectionChange: (ReaderSelection?) -> Void = { _ in }
+    var onPositionChange: (String) -> Void = { _ in }
+    var onVisibleParagraphs: ([ReaderParagraph]) -> Void = { _ in }
+    var onPageInfo: (Int, Int) -> Void = { _, _ in }
+
+    private let document: NativeChapterDocument
+    private let blockSpans: [String: NativeTextBlockSpan]
+
+    @Environment(\.emptyPalette) private var palette
+    @State private var paginated: PaginatedChapter?
+    @State private var pageIndex = 0
+    @State private var composeVersion = 0
+    @State private var lastComposeKey: ComposeKey?
+    @FocusState private var pageFocused: Bool
+
+    private struct ComposeKey: Equatable {
+        var width: CGFloat
+        var height: CGFloat
+        var fontSize: Double
+        var lineSpacing: Double
+        var appearance: ReaderAppearance
+        var isDark: Bool
+        var inlineMode: InlineNoteKind
+        var noteFingerprint: Int
+        var highlightFingerprint: Int
+    }
+
+    init(
+        chapter: EPUBChapter,
+        basePath: URL,
+        fontSize: Double,
+        lineSpacing: Double,
+        landing: ChapterLanding,
+        resumeUTF16Offset: Int,
+        chapterPlainText: String?,
+        highlights: [HighlightPaint],
+        inlineMode: InlineNoteKind,
+        inlineNotes: [InlineNotePaint],
+        appearance: ReaderAppearance = ReaderAppearance(),
+        selectionActive: Bool = false,
+        onTap: @escaping () -> Void = {},
+        onChapterBoundary: @escaping (PageTurnDirection) -> Void = { _ in },
+        onSelectionChange: @escaping (ReaderSelection?) -> Void = { _ in },
+        onPositionChange: @escaping (String) -> Void = { _ in },
+        onVisibleParagraphs: @escaping ([ReaderParagraph]) -> Void = { _ in },
+        onPageInfo: @escaping (Int, Int) -> Void = { _, _ in }
+    ) {
+        self.chapter = chapter
+        self.basePath = basePath
+        self.fontSize = fontSize
+        self.lineSpacing = lineSpacing
+        self.landing = landing
+        self.resumeUTF16Offset = resumeUTF16Offset
+        self.chapterPlainText = chapterPlainText
+        self.highlights = highlights
+        self.inlineMode = inlineMode
+        self.inlineNotes = inlineNotes
+        self.appearance = appearance
+        self.selectionActive = selectionActive
+        self.onTap = onTap
+        self.onChapterBoundary = onChapterBoundary
+        self.onSelectionChange = onSelectionChange
+        self.onPositionChange = onPositionChange
+        self.onVisibleParagraphs = onVisibleParagraphs
+        self.onPageInfo = onPageInfo
+
+        let parsed = NativeChapterParser.parse(chapter)
+        self.document = parsed
+        self.blockSpans = parsed.resolvedTextSpans(in: chapterPlainText)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let textSize = CGSize(
+                width: min(700, max(200, geometry.size.width - horizontalInset * 2)),
+                height: max(120, geometry.size.height - verticalInset * 2)
+            )
+            ZStack {
+                palette.window
+
+                if let paginated {
+                    MacPageTextView(
+                        text: paginated.pageText(pageIndex),
+                        globalLocation: paginated.characterRange(forPage: pageIndex).location,
+                        pageSize: textSize,
+                        clearSelection: !selectionActive,
+                        onSelectionChange: { handleSelection($0) },
+                        onClickAt: { handleTap(fraction: $0) }
+                    )
+                    .frame(width: textSize.width, height: textSize.height)
+                    .id("\(paginated.version)-\(pageIndex)")
+                    .transition(.opacity)
+
+                    pageArrows
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { location in
+                handleTap(fraction: geometry.size.width > 0 ? location.x / geometry.size.width : 0.5)
+            }
+            .focusable()
+            .focusEffectDisabled()
+            .focused($pageFocused)
+            .onKeyPress(.leftArrow) { turnPage(-1); return .handled }
+            .onKeyPress(.rightArrow) { turnPage(1); return .handled }
+            .onKeyPress(.space) { turnPage(1); return .handled }
+            .onAppear {
+                recomposeIfNeeded(textSize: textSize)
+                pageFocused = true
+            }
+            .onChange(of: composeKey(textSize: textSize)) { _, _ in
+                recomposeIfNeeded(textSize: textSize)
+            }
+            .onChange(of: pageIndex) { _, newIndex in
+                reportPage(newIndex)
+            }
+            .animation(.easeInOut(duration: 0.15), value: pageIndex)
+        }
+    }
+
+    private var horizontalInset: CGFloat { 72 }
+    private var verticalInset: CGFloat { 36 }
+
+    private var pageArrows: some View {
+        HStack {
+            arrowButton("chevron.left") { turnPage(-1) }
+            Spacer()
+            arrowButton("chevron.right") { turnPage(1) }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func arrowButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(palette.ink3)
+                .frame(width: 32, height: 56)
+                .background(palette.side.opacity(0.75), in: RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func handleTap(fraction: CGFloat) {
+        if selectionActive {
+            onSelectionChange(nil)
+            return
+        }
+        if fraction < 0.18 {
+            turnPage(-1)
+        } else if fraction > 0.82 {
+            turnPage(1)
+        } else {
+            onTap()
+        }
+    }
+
+    private func turnPage(_ delta: Int) {
+        guard let paginated else { return }
+        let target = pageIndex + delta
+        if target < 0 {
+            onChapterBoundary(.backward)
+            return
+        }
+        if target >= paginated.pageCount {
+            onChapterBoundary(.forward)
+            return
+        }
+        pageIndex = target
+    }
+
+    private func composeKey(textSize: CGSize) -> ComposeKey {
+        ComposeKey(
+            width: textSize.width,
+            height: textSize.height,
+            fontSize: fontSize,
+            lineSpacing: lineSpacing,
+            appearance: appearance,
+            isDark: palette.isDark,
+            inlineMode: inlineMode,
+            noteFingerprint: inlineNotes.reduce(0) { partial, note in
+                partial &+ note.idx &* 31 &+ note.text.utf16.count &+ (note.failed ? 7 : 0)
+            },
+            highlightFingerprint: highlights.reduce(0) { partial, paint in
+                partial &+ (paint.startUTF16 ?? 0) &* 31 &+ (paint.endUTF16 ?? 0)
+            }
+        )
+    }
+
+    private func recomposeIfNeeded(textSize: CGSize) {
+        let key = composeKey(textSize: textSize)
+        guard key != lastComposeKey else { return }
+        lastComposeKey = key
+
+        let anchorOffset = paginated.flatMap { $0.chapterOffset(forPage: pageIndex) }
+
+        let composer = PageComposer(
+            document: document,
+            blockSpans: blockSpans,
+            chapterPlainText: chapterPlainText,
+            basePath: basePath,
+            chapterHref: chapter.href,
+            fontSize: fontSize,
+            lineSpacing: lineSpacing,
+            appearance: appearance,
+            isDarkCanvas: palette.isDark,
+            inlineMode: inlineMode,
+            inlineNotes: inlineNotes,
+            highlights: highlights,
+            pageSize: textSize
+        )
+        composeVersion += 1
+        let next = composer.compose(version: composeVersion)
+        paginated = next
+
+        let landingPage: Int
+        if let anchorOffset, let page = next.page(forChapterOffset: anchorOffset) {
+            landingPage = page
+        } else {
+            switch landing {
+            case .end:
+                landingPage = max(0, next.pageCount - 1)
+            case .start:
+                if resumeUTF16Offset > 0,
+                   let page = next.page(forChapterOffset: resumeUTF16Offset) {
+                    landingPage = page
+                } else {
+                    landingPage = 0
+                }
+            }
+        }
+        pageIndex = min(landingPage, max(0, next.pageCount - 1))
+        reportPage(pageIndex)
+    }
+
+    private func reportPage(_ index: Int) {
+        guard let paginated else { return }
+        onPageInfo(index, paginated.pageCount)
+
+        let paragraphs = paginated.paragraphs(onPage: index)
+        if !paragraphs.isEmpty {
+            onVisibleParagraphs(paragraphs)
+        }
+
+        if let offset = paginated.chapterOffset(forPage: index) {
+            let source = chapterPlainText ?? document.plainText
+            let utf16 = Array(source.utf16)
+            let clamped = max(0, min(offset, utf16.count))
+            onPositionChange(String(decoding: utf16[0..<clamped], as: UTF16.self))
+        }
+    }
+
+    private func handleSelection(_ attrRange: NSRange?) {
+        guard let attrRange, attrRange.length > 0, let paginated else {
+            onSelectionChange(nil)
+            return
+        }
+        guard let chapterRange = paginated.chapterRange(forAttrRange: attrRange) else {
+            onSelectionChange(nil)
+            return
+        }
+        let source = chapterPlainText ?? document.plainText
+        onSelectionChange(
+            ReaderSelectionContext.selection(in: source, utf16Range: chapterRange)
+        )
+    }
+}
+
+private struct MacPageTextView: NSViewRepresentable {
+    let text: NSAttributedString
+    let globalLocation: Int
+    let pageSize: CGSize
+    let clearSelection: Bool
+    let onSelectionChange: (NSRange?) -> Void
+    let onClickAt: (CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            globalLocation: globalLocation,
+            onSelectionChange: onSelectionChange,
+            onClickAt: onClickAt
+        )
+    }
+
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView(frame: NSRect(origin: .zero, size: pageSize))
+        textView.drawsBackground = false
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.importsGraphics = false
+        textView.usesFindBar = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = false
+        textView.delegate = context.coordinator
+        textView.textStorage?.setAttributedString(text)
+
+        let click = NSClickGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleClick(_:))
+        )
+        click.delaysPrimaryMouseButtonEvents = false
+        textView.addGestureRecognizer(click)
+        return textView
+    }
+
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        context.coordinator.globalLocation = globalLocation
+        context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onClickAt = onClickAt
+        if textView.textStorage?.isEqual(to: text) != true {
+            context.coordinator.programmatic = true
+            textView.textStorage?.setAttributedString(text)
+            context.coordinator.programmatic = false
+        }
+        if clearSelection, textView.selectedRange().length > 0 {
+            context.coordinator.programmatic = true
+            textView.setSelectedRange(NSRange(location: NSNotFound, length: 0))
+            context.coordinator.programmatic = false
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var globalLocation: Int
+        var onSelectionChange: (NSRange?) -> Void
+        var onClickAt: (CGFloat) -> Void
+        var programmatic = false
+
+        init(
+            globalLocation: Int,
+            onSelectionChange: @escaping (NSRange?) -> Void,
+            onClickAt: @escaping (CGFloat) -> Void
+        ) {
+            self.globalLocation = globalLocation
+            self.onSelectionChange = onSelectionChange
+            self.onClickAt = onClickAt
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !programmatic,
+                  let textView = notification.object as? NSTextView else { return }
+            let range = textView.selectedRange()
+            guard range.location != NSNotFound, range.length > 0 else {
+                onSelectionChange(nil)
+                return
+            }
+            onSelectionChange(NSRange(location: globalLocation + range.location, length: range.length))
+        }
+
+        @objc func handleClick(_ recognizer: NSClickGestureRecognizer) {
+            guard let view = recognizer.view, view.bounds.width > 0 else { return }
+            let fraction = recognizer.location(in: view).x / view.bounds.width
+            onClickAt(fraction)
+        }
+    }
+}
+#endif
+
+private extension PagedColor {
     convenience init(hex: UInt32) {
         self.init(
             red: CGFloat((hex >> 16) & 0xFF) / 255,
@@ -754,4 +1241,3 @@ private extension UIColor {
         )
     }
 }
-#endif

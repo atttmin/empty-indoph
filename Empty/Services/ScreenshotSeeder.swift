@@ -86,21 +86,39 @@ private enum DemoEPUB {
           </metadata>
           <manifest>
             <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+            <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
           </manifest>
           <spine>
             <itemref idref="ch1"/>
+            <itemref idref="ch2"/>
           </spine>
         </package>
         """
+        // Long enough that the paged reader produces several pages —
+        // page-turn smoke tests and screenshots need real pagination.
+        let fillerParagraphs = (1...18).map { index in
+            """
+            <p>第\(index)节。读书不是把字看完，而是让一段文字在心里站住。空白处\
+            才放得下批注，节奏慢下来，问题才会浮出。这一段是排版与翻页的演示文本，\
+            用来撑起完整的一页，再多读一行，就再翻一页。</p>
+            """
+        }.joined()
         let chapter = """
         <html><head><title>第一章</title></head>\
-        <body><h1>第一章</h1><p>深读始于空白。导入一本书，朱批落在页边。</p></body></html>
+        <body><h1>第一章</h1><p>深读始于空白。导入一本书，朱批落在页边。</p>\
+        \(fillerParagraphs)<p>第一章在此收束：合上扉页，故事才真正开始。</p></body></html>
+        """
+        let chapter2 = """
+        <html><head><title>第二章</title></head>\
+        <body><h1>第二章</h1><p>第二章自此开始：换一页纸，换一种问法。</p>\
+        <p>翻页跨过章节边界时，阅读器应当无缝接上，而不是把读者丢回开头。</p></body></html>
         """
         return storedZIP(entries: [
             ("mimetype", Data("application/epub+zip".utf8)),
             ("META-INF/container.xml", Data(containerXML.utf8)),
             ("OEBPS/content.opf", Data(opf.utf8)),
             ("OEBPS/ch1.xhtml", Data(chapter.utf8)),
+            ("OEBPS/ch2.xhtml", Data(chapter2.utf8)),
         ])
     }
 
