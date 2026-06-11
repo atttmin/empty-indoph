@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 朱 · AI 伴读 is now a **reading agent**, not just RAG chat: the model
+  decides which reading tools to use per question (`ReadingAgent` loop,
+  ≤3 steps on-device / ≤4 cloud), with the step trace shown in the
+  conversation ("朱批 · 查已读「…」 → 生成闪卡(待确认)") and any failure
+  falling back to the old grounded-answer path
+  - `ReadingToolbox`: search_passages / recap_progress / explain /
+    find_link (reads, all position-capped through the existing
+    spoiler-safe pipelines) and add_vocab / make_flashcards (writes —
+    **proposal only**; the reader confirms with one tap in the panel
+    or iOS sheet before anything lands in the store)
+  - `AIService.toolStep`: on-device steps use Foundation Models guided
+    generation (a 3B model never emits free-form JSON), cloud uses
+    JSON mode with a tested parser — one loop, two routes, no
+    third-party agent framework
+
 - 「预译 + 永不阻塞」 (design round 2, from real reading feedback):
   - Persistent translation cache (`ParagraphTranslation` +
     `TranslationStore`, local store): every 双语/导读 paragraph, keyed by

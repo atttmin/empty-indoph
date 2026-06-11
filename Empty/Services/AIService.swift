@@ -50,6 +50,15 @@ nonisolated struct Flashcard: Hashable, Sendable {
     var answer: String
 }
 
+/// One decision of the reading-agent loop: call a tool with a single text
+/// argument, or finish with the answer. Kept to one string argument per
+/// tool — small on-device models handle that reliably; tools parse their
+/// own argument when they need structure.
+nonisolated enum AgentStep: Equatable, Sendable {
+    case call(tool: String, argument: String)
+    case finish(answer: String)
+}
+
 nonisolated enum AIServiceError: LocalizedError {
     case modelUnavailable(String)
     case emptyInput
@@ -119,6 +128,12 @@ protocol AIService: Sendable {
 
     /// Drafts up to `maxCount` study cards from a passage.
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard]
+
+    /// One reading-agent decision: given the tool catalog and the loop
+    /// transcript so far, either call a tool or finish. On-device uses
+    /// guided generation (a 3B model can't be trusted with free-form
+    /// JSON); cloud providers use JSON mode.
+    func toolStep(toolDocs: String, transcript: String) async throws -> AgentStep
 }
 
 extension AIService {

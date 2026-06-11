@@ -141,6 +141,22 @@ final class FoundationModelsAIService: AIService {
         return cards
     }
 
+    func toolStep(toolDocs: String, transcript: String) async throws -> AgentStep {
+        try ensureAvailable()
+        // Guided generation constrains the 3B model to a valid step — no
+        // free-form JSON to mis-emit.
+        let response = try await makeSession().respond(
+            to: Prompts.toolStep(toolDocs: toolDocs, transcript: transcript),
+            generating: AgentStepDraft.self
+        )
+        let draft = response.content
+        if draft.action.lowercased().contains("call"), !draft.tool.isEmpty {
+            return .call(tool: draft.tool, argument: draft.argument)
+        }
+        guard !draft.answer.isEmpty else { throw AIServiceError.invalidResponse }
+        return .finish(answer: draft.answer)
+    }
+
     // MARK: - Plumbing
 
     private func budget(for text: String) -> Int {
@@ -201,6 +217,18 @@ private struct FlashcardDraft {
 }
 
 @Generable
+private struct AgentStepDraft {
+    @Guide(description: "Either \"call\" to use a tool, or \"finish\" to reply to the reader.")
+    var action: String
+    @Guide(description: "The tool name when action is call; empty otherwise.")
+    var tool: String
+    @Guide(description: "The tool's single text argument; empty if none.")
+    var argument: String
+    @Guide(description: "The reply to the reader when action is finish; empty otherwise.")
+    var answer: String
+}
+
+@Generable
 private struct FlashcardSetDraft {
     @Guide(description: "Study cards covering the passage's key ideas.")
     var cards: [FlashcardDraft]
@@ -253,6 +281,20 @@ private enum Prompts {
         \(text)
         """
     }
+
+    static func toolStep(toolDocs: String, transcript: String) -> String {
+        """
+        You may use these tools to look things up in what the reader has \
+        already read, or to propose saving study material:
+        \(toolDocs)
+
+        Conversation and tool results so far:
+        \(transcript)
+
+        Decide ONE next step: call a tool only when its result is needed; \
+        when you have enough, finish with a reply in the reader's language.
+        """
+    }
 }
 #else
 /// Stub for CI and SDKs without the Foundation Models framework (e.g. GitHub
@@ -281,6 +323,11 @@ final class FoundationModelsAIService: AIService {
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] {
         try ensureAvailable()
         return []
+    }
+
+    func toolStep(toolDocs: String, transcript: String) async throws -> AgentStep {
+        try ensureAvailable()
+        return .finish(answer: "")
     }
 }
 #endif

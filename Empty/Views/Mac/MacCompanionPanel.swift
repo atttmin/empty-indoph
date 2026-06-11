@@ -121,11 +121,22 @@ struct MacCompanionPanel: View {
                 .padding(.leading, 40)
         case .ai:
             VStack(alignment: .leading, spacing: 8) {
+                if !message.steps.isEmpty {
+                    Text("朱批 · \(message.steps.joined(separator: " → "))")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(palette.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(palette.accentSoft, in: RoundedRectangle(cornerRadius: 8))
+                }
                 Text(message.text)
                     .font(.system(size: 13))
                     .lineSpacing(4.5)
                     .foregroundStyle(palette.ink2)
                     .textSelection(.enabled)
+                if !message.actions.isEmpty {
+                    actionRow(for: message)
+                }
                 if message.source != nil || message.question != nil {
                     saveRow(for: message)
                 }
@@ -147,6 +158,40 @@ struct MacCompanionPanel: View {
                 .strokeBorder(palette.line, lineWidth: 1)
             )
             .padding(.trailing, 28)
+        }
+    }
+
+    /// Confirm-gated writes the agent proposed (加入生词本 / 保存闪卡…).
+    private func actionRow(for message: CompanionModel.Message) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(message.actions) { action in
+                Button {
+                    model.perform(
+                        actionID: action.id,
+                        messageID: message.id,
+                        book: book,
+                        position: position,
+                        modelContext: modelContext
+                    )
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(action.isDone ? "✓" : "＋")
+                            .font(.system(size: 11, weight: .bold))
+                        Text(action.title)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(action.isDone ? palette.ink3 : palette.onAccent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        action.isDone ? palette.accentSoft : palette.accent,
+                        in: Capsule()
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(action.isDone)
+            }
         }
     }
 

@@ -146,11 +146,49 @@ struct IOSCompanionSheet: View {
                 .padding(.leading, 40)
         case .ai:
             VStack(alignment: .leading, spacing: 7) {
+                if !message.steps.isEmpty {
+                    Text("朱批 · \(message.steps.joined(separator: " → "))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(palette.accent)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(palette.accentSoft, in: RoundedRectangle(cornerRadius: 7))
+                }
                 Text(message.text)
                     .font(.system(size: 12.5))
                     .lineSpacing(4.5)
                     .foregroundStyle(palette.ink2)
                     .textSelection(.enabled)
+                ForEach(message.actions) { action in
+                    Button {
+                        if let book {
+                            model.perform(
+                                actionID: action.id,
+                                messageID: message.id,
+                                book: book,
+                                position: position,
+                                modelContext: modelContext
+                            )
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(action.isDone ? "✓" : "＋")
+                                .font(.system(size: 10, weight: .bold))
+                            Text(action.title)
+                                .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(action.isDone ? palette.ink3 : palette.onAccent)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 5)
+                        .background(
+                            action.isDone ? palette.accentSoft : palette.accent,
+                            in: Capsule()
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(action.isDone)
+                }
                 if let source = message.source {
                     Text("原文 · \(source)")
                         .font(.system(size: 10))

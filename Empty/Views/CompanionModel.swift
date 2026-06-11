@@ -29,6 +29,10 @@ final class CompanionModel {
         var source: String?
         /// The user question this AI answer responded to; enables 存为卡片.
         var question: String?
+        /// 朱批 agent trace ("查已读「…」 → 生成闪卡(待确认)").
+        var steps: [String] = []
+        /// Confirm-gated writes the agent proposed with this answer.
+        var actions: [CompanionAction] = []
     }
 
     var messages: [Message] = [
@@ -70,39 +74,125 @@ final class CompanionModel {
                     ))
                     return
                 }
-                let chunks = try ChunkRetriever(modelContext: modelContext).retrieve(
-                    question: question,
-                    bookID: book.id,
-                    position: position
-                )
-                guard !chunks.isEmpty else {
+
+                let resolution = AIProviderSettings.load().resolveUsableService()
+                // Agent first: the model decides which reading tools to
+                // use. Any failure falls back to plain grounded RAG so the
+                // companion never dead-ends.
+                do {
+                    let toolbox = ReadingToolbox(
+                        book: book,
+                        position: position,
+                        modelContext: modelContext,
+                        service: resolution.service
+                    )
+                    let agent = ReadingAgent(
+                        toolbox: toolbox,
+                        service: resolution.service,
+                        maxSteps: resolution.route == .onDevice ? 3 : 4
+                    )
+                    let reply = try await agent.run(question: question)
                     messages.append(Message(
                         role: .ai,
-                        text: "在你读过的部分里没找到相关内容。换个问法试试?"
+                        text: reply.text,
+                        question: question,
+                        steps: reply.steps,
+                        actions: reply.actions
                     ))
-                    return
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    try await legacyAnswer(
+                        question: question,
+                        book: book,
+                        position: position,
+                        modelContext: modelContext,
+                        service: resolution.service
+                    )
                 }
-                let passages = chunks.map { GroundedPassage(id: $0.ordinal, text: $0.text) }
-                let resolution = AIProviderSettings.load().resolveUsableService()
-                let answer = try await resolution.service.answer(
-                    question: question,
-                    groundedIn: passages
-                )
-                let citedChunk = answer.citedPassageIDs
-                    .compactMap { id in chunks.first { $0.ordinal == id } }
-                    .first ?? chunks.first
-                messages.append(Message(
-                    role: .ai,
-                    text: answer.text,
-                    source: citedChunk.flatMap(Self.sourceTitle(for:)),
-                    question: question
-                ))
             } catch is CancellationError {
                 // Panel torn down mid-flight.
             } catch {
                 messages.append(Message(
                     role: .ai,
                     text: "出错了:\(error.localizedDescription)"
+                ))
+            }
+        }
+    }
+
+    /// The pre-agent pipeline: spoiler-safe retrieval + one grounded answer.
+    private func legacyAnswer(
+        question: String,
+        book: Book,
+        position: ReadingPosition,
+        modelContext: ModelContext,
+        service: any AIService
+    ) async throws {
+        let chunks = try ChunkRetriever(modelContext: modelContext).retrieve(
+            question: question,
+            bookID: book.id,
+            position: position
+        )
+        guard !chunks.isEmpty else {
+            messages.append(Message(
+                role: .ai,
+                text: "在你读过的部分里没找到相关内容。换个问法试试?"
+            ))
+            return
+        }
+        let passages = chunks.map { GroundedPassage(id: $0.ordinal, text: $0.text) }
+        let answer = try await service.answer(
+            question: question,
+            groundedIn: passages
+        )
+        let citedChunk = answer.citedPassageIDs
+            .compactMap { id in chunks.first { $0.ordinal == id } }
+            .first ?? chunks.first
+        messages.append(Message(
+            role: .ai,
+            text: answer.text,
+            source: citedChunk.flatMap(Self.sourceTitle(for:)),
+            question: question
+        ))
+    }
+
+    /// Executes one reader-confirmed agent action and marks it done on the
+    /// message, appending the outcome to the conversation.
+    func perform(
+        actionID: UUID,
+        messageID: UUID,
+        book: Book,
+        position: ReadingPosition,
+        modelContext: ModelContext
+    ) {
+        guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
+              let actionIndex = messages[messageIndex].actions
+                  .firstIndex(where: { $0.id == actionID }),
+              !messages[messageIndex].actions[actionIndex].isDone
+        else { return }
+        let action = messages[messageIndex].actions[actionIndex]
+
+        Task {
+            do {
+                let resolution = AIProviderSettings.load().resolveUsableService()
+                let toolbox = ReadingToolbox(
+                    book: book,
+                    position: position,
+                    modelContext: modelContext,
+                    service: resolution.service
+                )
+                let outcome = try await toolbox.perform(action)
+                if let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
+                   let actionIndex = messages[messageIndex].actions
+                       .firstIndex(where: { $0.id == actionID }) {
+                    messages[messageIndex].actions[actionIndex].isDone = true
+                }
+                messages.append(Message(role: .ai, text: "✓ \(outcome)"))
+            } catch {
+                messages.append(Message(
+                    role: .ai,
+                    text: "这一步没做成:\(error.localizedDescription)"
                 ))
             }
         }

@@ -111,7 +111,30 @@ final class CloudAIService: AIService {
         return cards
     }
 
+    func toolStep(toolDocs: String, transcript: String) async throws -> AgentStep {
+        try ensureAvailable()
+        let content = try await chat(
+            user: CloudPrompts.toolStep(toolDocs: toolDocs, transcript: transcript),
+            jsonResponse: true
+        )
+        return try Self.agentStep(fromContent: content)
+    }
+
     // MARK: - Response mapping (internal for tests)
+
+    static func agentStep(fromContent content: String) throws -> AgentStep {
+        let data = jsonData(fromModelContent: content)
+        guard let payload = try? JSONDecoder().decode(AgentStepPayload.self, from: data) else {
+            throw AIServiceError.invalidResponse
+        }
+        if payload.action == "call", let tool = payload.tool, !tool.isEmpty {
+            return .call(tool: tool, argument: payload.argument ?? "")
+        }
+        if let answer = payload.answer, !answer.isEmpty {
+            return .finish(answer: answer)
+        }
+        throw AIServiceError.invalidResponse
+    }
 
     static func groundedAnswer(
         fromContent content: String,
@@ -255,6 +278,13 @@ nonisolated struct FlashcardsPayload: Decodable {
     var cards: [Card]
 }
 
+nonisolated struct AgentStepPayload: Decodable {
+    var action: String
+    var tool: String?
+    var argument: String?
+    var answer: String?
+}
+
 // MARK: - Prompts
 
 private enum CloudPrompts {
@@ -303,6 +333,26 @@ private enum CloudPrompts {
         {"cards": [{"question": "...", "answer": "..."}]}.
 
         \(text)
+        """
+    }
+
+    static func toolStep(toolDocs: String, transcript: String) -> String {
+        """
+        You are the reading agent inside a book app. You may use the tools \
+        below to look things up in what the reader has ALREADY read, or to \
+        propose saving study material. Decide ONE next step.
+
+        Tools:
+        \(toolDocs)
+
+        Conversation and tool results so far:
+        \(transcript)
+
+        Respond with JSON exactly like one of:
+        {"action": "call", "tool": "<tool name>", "argument": "<single text argument>"}
+        {"action": "finish", "answer": "<your reply to the reader, in their language>"}
+
+        Call a tool only when its result is needed. When you have enough, finish.
         """
     }
 }
