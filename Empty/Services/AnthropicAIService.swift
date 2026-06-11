@@ -102,6 +102,21 @@ final class AnthropicAIService: AIService {
         return try CloudAIService.groundedAnswer(fromContent: content, includedIDs: includedIDs)
     }
 
+    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+        try ensureAvailable()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AIServiceError.emptyInput }
+        guard trimmed.count <= configuration.windowBudget else {
+            throw AIServiceError.inputTooLarge
+        }
+        let content = try await message(
+            user: AIInlineNotePrompt.user(kind: kind, text: trimmed)
+        )
+        let note = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty else { throw AIServiceError.invalidResponse }
+        return note
+    }
+
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] {
         try ensureAvailable()
         guard maxCount > 0 else { return [] }

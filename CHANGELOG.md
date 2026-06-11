@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Mac 双语/导读 no longer snaps back toward the top while vertical
+  scrolling and translations stream in: style updates now preserve the
+  parallel-scroll anchor, inline note generation uses a plain-text AI path
+  instead of the grounded JSON Q&A envelope, and transient busy/rate-limit
+  failures retry instead of immediately painting “译文暂不可用”.
 - A corrupted or partially-imported book could no longer be removed: book
   deletion now always clears the library record (and sweeps its chapters,
   chunks, and cached translations), and on-disk file removal is

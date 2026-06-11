@@ -121,6 +121,20 @@ final class FoundationModelsAIService: AIService {
         )
     }
 
+    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+        try ensureAvailable()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AIServiceError.emptyInput }
+        guard trimmed.count <= budget(for: trimmed) else {
+            throw AIServiceError.inputTooLarge
+        }
+        let note = try await respond(
+            to: AIInlineNotePrompt.user(kind: kind, text: trimmed)
+        )
+        guard !note.isEmpty else { throw AIServiceError.invalidResponse }
+        return note
+    }
+
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] {
         try ensureAvailable()
         guard maxCount > 0 else { return [] }
@@ -318,6 +332,11 @@ final class FoundationModelsAIService: AIService {
     ) async throws -> GroundedAnswer {
         try ensureAvailable()
         return GroundedAnswer(text: "", citedPassageIDs: [])
+    }
+
+    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+        try ensureAvailable()
+        return ""
     }
 
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] {

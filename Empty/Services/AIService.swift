@@ -37,6 +37,89 @@ nonisolated struct GroundedPassage: Identifiable, Sendable {
     }
 }
 
+/// Plain AI text generated for an in-flow reader annotation. This is not the
+/// grounded Q&A path: the reader needs the text itself, not JSON/citations.
+nonisolated enum AIInlineNoteKind: Sendable {
+    case bilingual
+    case companion
+}
+
+nonisolated enum AIInlineNotePrompt {
+    static func user(kind: AIInlineNoteKind, text: String) -> String {
+        let instruction = switch kind {
+        case .bilingual:
+            "Translate this paragraph into natural, literary Simplified Chinese."
+        case .companion:
+            "Retell this paragraph in clear modern Simplified Chinese. Preserve the key imagery and tone. Use no more than three sentences."
+        }
+        return """
+        \(instruction)
+        Output only the generated Chinese text. Do not include JSON, citations, labels, bullets, or commentary.
+
+        Text:
+        \(text)
+        """
+    }
+}
+
+nonisolated enum AITransientRetry {
+    static func run<T>(
+        attempts: Int = 2,
+        delayNanoseconds: UInt64 = 250_000_000,
+        operation: () async throws -> T
+    ) async throws -> T {
+        let totalAttempts = max(1, attempts)
+        var nextDelay = delayNanoseconds
+        for attempt in 1...totalAttempts {
+            do {
+                return try await operation()
+            } catch {
+                guard attempt < totalAttempts, isTransient(error) else {
+                    throw error
+                }
+                try await Task.sleep(nanoseconds: nextDelay)
+                nextDelay *= 2
+            }
+        }
+        throw AIServiceError.invalidResponse
+    }
+
+    static func isTransient(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut, .cannotFindHost, .cannotConnectToHost,
+                 .networkConnectionLost, .dnsLookupFailed,
+                 .notConnectedToInternet:
+                return true
+            default:
+                return false
+            }
+        }
+        guard let serviceError = error as? AIServiceError else { return false }
+        if case .providerError(let message) = serviceError {
+            return isTransientProviderMessage(message)
+        }
+        return false
+    }
+
+    private static func isTransientProviderMessage(_ message: String) -> Bool {
+        let lowered = message.lowercased()
+        return lowered.contains("429")
+            || lowered.contains("busy")
+            || lowered.contains("capacity")
+            || lowered.contains("connection")
+            || lowered.contains("network")
+            || lowered.contains("overload")
+            || lowered.contains("rate limit")
+            || lowered.contains("rate_limit")
+            || lowered.contains("temporar")
+            || lowered.contains("timed out")
+            || lowered.contains("timeout")
+            || lowered.contains("too many requests")
+            || lowered.contains("try again")
+    }
+}
+
 /// An answer constrained to the provided passages, with citations.
 nonisolated struct GroundedAnswer: Equatable, Sendable {
     var text: String
@@ -125,6 +208,12 @@ protocol AIService: Sendable {
     /// off limits — this is what keeps answers spoiler-safe and
     /// book-grounded.
     func answer(question: String, groundedIn passages: [GroundedPassage]) async throws -> GroundedAnswer
+
+    /// Generates a plain paragraph translation or 导读 note. Unlike
+    /// `answer(question:groundedIn:)`, this path deliberately does not ask
+    /// for JSON; inline reading notes should not fail because a model chose
+    /// prose over a citation envelope.
+    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String
 
     /// Drafts up to `maxCount` study cards from a passage.
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard]

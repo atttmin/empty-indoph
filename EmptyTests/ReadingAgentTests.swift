@@ -83,6 +83,10 @@ private final class ScriptedAIService: AIService, @unchecked Sendable {
         GroundedAnswer(text: fallbackAnswer, citedPassageIDs: [])
     }
 
+    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+        fallbackAnswer
+    }
+
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] {
         Array(flashcardsToReturn.prefix(maxCount))
     }

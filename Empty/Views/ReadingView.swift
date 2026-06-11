@@ -852,11 +852,12 @@ struct ReadingView: View {
             // Reader moved on — skip the model call, leave it uncached.
             guard isBilingual, currentChapterIndex == chapter else { continue }
             do {
-                let answer = try await resolution.service.answer(
-                    question: "Translate this paragraph into natural, literary Simplified Chinese. Output only the translation, nothing else.",
-                    groundedIn: [GroundedPassage(id: 0, text: paragraph.text)]
-                )
-                let text = answer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let text = try await AITransientRetry.run {
+                    try await resolution.service.inlineNote(
+                        for: paragraph.text,
+                        kind: .bilingual
+                    )
+                }.trimmingCharacters(in: .whitespacesAndNewlines)
                 inlineCache[key] = text
                 if !text.isEmpty {
                     TranslationStore(modelContext: modelContext).store(
@@ -871,9 +872,10 @@ struct ReadingView: View {
                     inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
                 }
             } catch {
-                // Remember the failure in memory only, so a flaky provider
-                // isn't re-polled on every page turn but a fresh visit
-                // retries.
+                // Transient provider pressure (busy/rate-limited/network)
+                // should retry on the next settled viewport report, not
+                // retire the paragraph for this visit.
+                guard !AITransientRetry.isTransient(error) else { continue }
                 inlineCache[key] = ""
             }
         }
@@ -1042,6 +1044,11 @@ final class ReaderBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler
     var inlineKind: InlineNoteKind = .none
     var inlineLayout: InlineNoteLayout = .stacked
     var inlineNotes: [InlineNotePaint] = []
+    /// Last style pushed into the page. SwiftUI re-renders the web view on
+    /// every reader state change (each arriving translation included);
+    /// re-running `updateStyle` then would re-page against a stale page
+    /// index and fight the user's scroll — only push when style changed.
+    var appliedStyle: (fontSize: Double, isDark: Bool, lineSpacing: Double)?
     var onTap: () -> Void = {}
     var onChapterBoundary: (PageTurnDirection) -> Void = { _ in }
     var onSelectionChange: (ReaderSelection?) -> Void = { _ in }
@@ -1228,6 +1235,7 @@ struct ChapterWebView: UIViewRepresentable {
         context.coordinator.inlineKind = inlineMode
         context.coordinator.inlineLayout = inlineLayout
         context.coordinator.inlineNotes = inlineNotes
+        context.coordinator.appliedStyle = (fontSize, isDarkMode, lineSpacing)
         loadChapter(in: webView)
         return webView
     }
@@ -1240,11 +1248,16 @@ struct ChapterWebView: UIViewRepresentable {
             context.coordinator.inlineKind = inlineMode
             context.coordinator.inlineLayout = inlineLayout
             context.coordinator.inlineNotes = inlineNotes
+            context.coordinator.appliedStyle = (fontSize, isDarkMode, lineSpacing)
             loadChapter(in: webView)
         } else {
-            webView.evaluateJavaScript(
-                "updateStyle(\(fontSize), \(isDarkMode), \(lineSpacing));"
-            )
+            let style = (fontSize: fontSize, isDark: isDarkMode, lineSpacing: lineSpacing)
+            if context.coordinator.appliedStyle ?? (0, !isDarkMode, 0) != style {
+                context.coordinator.appliedStyle = style
+                webView.evaluateJavaScript(
+                    "updateStyle(\(fontSize), \(isDarkMode), \(lineSpacing));"
+                )
+            }
             if context.coordinator.paints != highlights {
                 context.coordinator.paints = highlights
                 context.coordinator.applyPaints(on: webView)
@@ -1307,6 +1320,7 @@ struct ChapterWebView: NSViewRepresentable {
         context.coordinator.inlineKind = inlineMode
         context.coordinator.inlineLayout = inlineLayout
         context.coordinator.inlineNotes = inlineNotes
+        context.coordinator.appliedStyle = (fontSize, isDarkMode, lineSpacing)
         loadChapter(in: webView)
         return webView
     }
@@ -1319,11 +1333,16 @@ struct ChapterWebView: NSViewRepresentable {
             context.coordinator.inlineKind = inlineMode
             context.coordinator.inlineLayout = inlineLayout
             context.coordinator.inlineNotes = inlineNotes
+            context.coordinator.appliedStyle = (fontSize, isDarkMode, lineSpacing)
             loadChapter(in: webView)
         } else {
-            webView.evaluateJavaScript(
-                "updateStyle(\(fontSize), \(isDarkMode), \(lineSpacing));"
-            )
+            let style = (fontSize: fontSize, isDark: isDarkMode, lineSpacing: lineSpacing)
+            if context.coordinator.appliedStyle ?? (0, !isDarkMode, 0) != style {
+                context.coordinator.appliedStyle = style
+                webView.evaluateJavaScript(
+                    "updateStyle(\(fontSize), \(isDarkMode), \(lineSpacing));"
+                )
+            }
             if context.coordinator.paints != highlights {
                 context.coordinator.paints = highlights
                 context.coordinator.applyPaints(on: webView)
@@ -1888,19 +1907,32 @@ extension ChapterWebView {
         function turnForward() { if (!readerNext()) { post('boundaryForward'); } }
         function turnBackward() { if (!readerPrev()) { post('boundaryBackward'); } }
         function updateStyle(fontSize, isDark, lineSpacing) {
-            const bg = isDark ? '#1F1B16' : '#F7F2E9';
-            const fg = isDark ? '#EDE5D4' : '#2A2419';
-            document.body.style.fontSize = fontSize + 'px';
-            document.body.style.lineHeight = lineSpacing;
-            document.body.style.backgroundColor = bg;
-            document.body.style.color = fg;
-            const root = document.documentElement.style;
-            root.setProperty('--e-ink2', isDark ? '#C4B9A4' : '#5C5443');
-            root.setProperty('--e-line2', isDark ? '#453C2F' : '#D8CEBB');
-            root.setProperty('--e-acc', isDark ? '#D86B47' : '#B5482A');
-            root.setProperty('--e-acc-soft', isDark ? 'rgba(216,107,71,0.12)' : 'rgba(181,72,42,0.08)');
-            // Reflow shuffles content between columns; reapply the kept page.
-            requestAnimationFrame(function () { readerGoTo(pageIndex, false); });
+            withParallelAnchor(function () {
+                const bg = isDark ? '#1F1B16' : '#F7F2E9';
+                const fg = isDark ? '#EDE5D4' : '#2A2419';
+                document.body.style.fontSize = fontSize + 'px';
+                document.body.style.lineHeight = lineSpacing;
+                document.body.style.backgroundColor = bg;
+                document.body.style.color = fg;
+                const root = document.documentElement.style;
+                root.setProperty('--e-ink2', isDark ? '#C4B9A4' : '#5C5443');
+                root.setProperty('--e-line2', isDark ? '#453C2F' : '#D8CEBB');
+                root.setProperty('--e-acc', isDark ? '#D86B47' : '#B5482A');
+                root.setProperty('--e-acc-soft', isDark ? 'rgba(216,107,71,0.12)' : 'rgba(181,72,42,0.08)');
+            });
+            // Paged columns need re-fitting after a style reflow. The
+            // vertical parallel view must not call readerGoTo(pageIndex):
+            // SwiftUI updates can arrive while native scrolling is between
+            // page buckets, and the stale pageIndex is what snapped the
+            // reader back toward the top.
+            requestAnimationFrame(function () {
+                if (layoutMode === 'parallel') {
+                    pageIndex = currentPage();
+                    reportPosition();
+                } else {
+                    readerGoTo(pageIndex, false);
+                }
+            });
         }
         // At the scroll extremes a further keyboard turn crosses chapters.
         function parallelTurn(forward) {
@@ -1998,7 +2030,13 @@ extension ChapterWebView {
             }
         }, { passive: true });
         // Window resizes reflow the columns; stay on the kept page.
-        window.addEventListener('resize', function () { readerGoTo(pageIndex, false); });
+        window.addEventListener('resize', function () {
+            // Parallel scrolls vertically — the browser keeps the offset
+            // through a resize; re-paging from a possibly stale pageIndex
+            // is what used to snap the reader to the top.
+            if (layoutMode === 'parallel') { pageIndex = currentPage(); return; }
+            readerGoTo(pageIndex, false);
+        });
         // Images decode lazily and lay out late: a still-decoding image in
         // an off-screen column can paint blank, and a late layout shift can
         // desync paging. Force eager synchronous decode, then re-fit the

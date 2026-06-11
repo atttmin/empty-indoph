@@ -1129,11 +1129,6 @@ struct MacReaderScreen: View {
 
     // MARK: Inline notes (双语对照 / 导读)
 
-    static let bilingualPrompt =
-        "Translate this paragraph into natural, literary Simplified Chinese. Output only the translation, nothing else."
-    static let companionPrompt =
-        "用平实的现代中文把这段话的意思讲清楚,保留关键意象与语气,不超过三句。只输出导读文本。"
-
     private func inlineKey(_ mode: MacReadingMode, _ chapter: Int, _ idx: Int) -> String {
         "\(mode.rawValue)|\(chapter)|\(idx)"
     }
@@ -1188,7 +1183,7 @@ struct MacReaderScreen: View {
             }
             return
         }
-        let question = mode == .bilingual ? Self.bilingualPrompt : Self.companionPrompt
+        let inlineKind: AIInlineNoteKind = mode == .bilingual ? .bilingual : .companion
         let kind: TranslationKind = mode == .companion ? .companion : .bilingual
         for paragraph in paragraphs {
             let key = inlineKey(mode, chapter, paragraph.idx)
@@ -1196,11 +1191,12 @@ struct MacReaderScreen: View {
             // Reader moved on — skip the model call, leave it uncached.
             guard readingMode == mode, currentChapterIndex == chapter else { continue }
             do {
-                let answer = try await resolution.service.answer(
-                    question: question,
-                    groundedIn: [GroundedPassage(id: 0, text: paragraph.text)]
-                )
-                let text = answer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let text = try await AITransientRetry.run {
+                    try await resolution.service.inlineNote(
+                        for: paragraph.text,
+                        kind: inlineKind
+                    )
+                }.trimmingCharacters(in: .whitespacesAndNewlines)
                 inlineCache[key] = text
                 if !text.isEmpty {
                     TranslationStore(modelContext: modelContext).store(
@@ -1216,9 +1212,11 @@ struct MacReaderScreen: View {
                     inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
                 }
             } catch {
-                // Remember the failure in memory only, so a flaky provider
-                // isn't re-polled on every page turn but a fresh visit
-                // retries; tell the page to retire the "预译中" placeholder.
+                // Busy/rate-limited providers are common while 导读, summary,
+                // and pre-translation compete. Let the paragraph retry on the
+                // next settled viewport report instead of painting a scary
+                // permanent failure marker.
+                guard !AITransientRetry.isTransient(error) else { continue }
                 inlineCache[key] = ""
                 if readingMode == mode, currentChapterIndex == chapter {
                     inlineNotes.append(
@@ -1265,11 +1263,13 @@ struct MacReaderScreen: View {
                 tocTitleTranslations[chapter.index] = cached
                 continue
             }
-            guard let answer = try? await resolution.service.answer(
-                question: "Translate this chapter title into concise Simplified Chinese. Output only the translation.",
-                groundedIn: [GroundedPassage(id: 0, text: title)]
+            // Plain-text path — the grounded JSON Q&A path occasionally
+            // mis-formats and would surface as a missing translation.
+            guard let note = try? await resolution.service.inlineNote(
+                for: title,
+                kind: .bilingual
             ) else { continue }
-            let text = answer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
             store.store(text, bookID: bookID, chapterIndex: chapter.index, kind: .title, text: title)
             tocTitleTranslations[chapter.index] = text
@@ -1296,11 +1296,11 @@ struct MacReaderScreen: View {
             for paragraph in paragraphs {
                 guard !Task.isCancelled, readingMode == .bilingual else { return }
                 if store.lookup(bookID: bookID, kind: .bilingual, text: paragraph) == nil {
-                    guard let answer = try? await resolution.service.answer(
-                        question: Self.bilingualPrompt,
-                        groundedIn: [GroundedPassage(id: 0, text: paragraph)]
-                    ) else { continue }
-                    let text = answer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let text = try? await resolution.service.inlineNote(
+                        for: paragraph,
+                        kind: .bilingual
+                    ).trimmingCharacters(in: .whitespacesAndNewlines)
+                    else { continue }
                     guard !text.isEmpty else { continue }
                     store.store(
                         text,
@@ -1365,10 +1365,12 @@ struct MacReaderScreen: View {
             let resolution = AIProviderSettings.load().resolveUsableService()
             let clipped = String(text.prefix(4_000))
             if readingMode == .bilingual {
-                modeGuideText = try await resolution.service.answer(
-                    question: "Provide a faithful Chinese translation of this chapter excerpt for a bilingual reader.",
-                    groundedIn: [GroundedPassage(id: 0, text: clipped)]
-                ).text
+                modeGuideText = try await AITransientRetry.run {
+                    try await resolution.service.inlineNote(
+                        for: clipped,
+                        kind: .bilingual
+                    )
+                }
             } else {
                 modeGuideText = try await resolution.service.summarize(clipped, focus: .recap)
             }

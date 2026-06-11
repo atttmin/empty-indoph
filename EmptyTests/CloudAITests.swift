@@ -90,6 +90,29 @@ struct CloudAITests {
         }
     }
 
+    @Test func inlineNotePromptIsPlainTextNotJSON() {
+        let prompt = AIInlineNotePrompt.user(
+            kind: .bilingual,
+            text: "Our life is frittered away by detail."
+        )
+        #expect(prompt.contains("Output only the generated Chinese text"))
+        #expect(prompt.contains("Do not include JSON"))
+        #expect(prompt.contains("Text:\nOur life is frittered away by detail."))
+    }
+
+    @Test func transientRetryClassifiesProviderPressureOnly() {
+        #expect(AITransientRetry.isTransient(
+            AIServiceError.providerError("The on-device model is busy. Try again in a moment.")
+        ))
+        #expect(AITransientRetry.isTransient(
+            AIServiceError.providerError("HTTP 429 Too Many Requests")
+        ))
+        #expect(!AITransientRetry.isTransient(AIServiceError.invalidResponse))
+        #expect(!AITransientRetry.isTransient(
+            AIServiceError.providerError("Insufficient Balance")
+        ))
+    }
+
     @Test func flashcardsDecodeAndRespectMaxCount() throws {
         let content = """
         {"cards": [
