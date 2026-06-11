@@ -224,7 +224,7 @@ struct ReadingView: View {
         .sheet(isPresented: $showChapterList) {
             ChapterListView(
                 titles: sectionTitles,
-                listTitle: "Chapters",
+                unitLabel: "章",
                 currentIndex: currentChapterIndex
             ) { index in
                 currentChapterIndex = index
@@ -324,7 +324,7 @@ struct ReadingView: View {
             .sheet(isPresented: $showChapterList) {
                 ChapterListView(
                     titles: sectionTitles,
-                    listTitle: "Pages",
+                    unitLabel: "页",
                     currentIndex: currentChapterIndex
                 ) { index in
                     currentChapterIndex = index
@@ -1831,44 +1831,114 @@ extension ChapterWebView {
 
 // MARK: - Chapter List
 
+/// 目录 in the 朱批 language: serif header, numbered rows, read chapters
+/// dimmed, the current one carrying the vermilion 正在读 chip. Opens
+/// scrolled to where the reader is.
 struct ChapterListView: View {
     let titles: [String]
-    var listTitle: String = "Chapters"
+    /// "章" for EPUB chapters, "页" for PDF pages.
+    var unitLabel: String = "章"
     let currentIndex: Int
     let onSelect: (Int) -> Void
+
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.emptyPalette) private var palette
 
     var body: some View {
-        NavigationStack {
-            List {
-                ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
-                    Button {
-                        onSelect(index)
-                    } label: {
-                        HStack {
-                            Text(title)
-                                .font(.subheadline)
-                                .foregroundStyle(index == currentIndex ? Color.accentColor : Color.primary)
-                            Spacer()
-                            if index == currentIndex {
-                                Image(systemName: "checkmark")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(Color.accentColor)
-                            }
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(palette.line).frame(height: 1)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
+                            row(index: index, title: title)
+                                .id(index)
                         }
                     }
+                    .padding(EdgeInsets(top: 10, leading: 12, bottom: 16, trailing: 12))
                 }
-            }
-            .navigationTitle(listTitle)
-            #if !os(macOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                .onAppear {
+                    proxy.scrollTo(currentIndex, anchor: .center)
                 }
             }
         }
+        .background(palette.window)
+        #if os(iOS)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        #endif
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("目录")
+                    .font(.system(size: 17, weight: .black, design: .serif))
+                    .foregroundStyle(palette.ink)
+                Text("共 \(titles.count) \(unitLabel) · 正在读第 \(currentIndex + 1) \(unitLabel)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.ink3)
+            }
+            Spacer()
+            Button {
+                dismiss()
+            } label: {
+                Text("×")
+                    .font(.system(size: 14))
+                    .foregroundStyle(palette.ink3)
+                    .frame(width: 28, height: 28)
+                    .background(palette.accentSoft, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(EdgeInsets(top: 16, leading: 20, bottom: 12, trailing: 16))
+    }
+
+    private func row(index: Int, title: String) -> some View {
+        let isCurrent = index == currentIndex
+        let isRead = index < currentIndex
+        let display = title.trimmingCharacters(in: .whitespaces).isEmpty
+            ? "第 \(index + 1) \(unitLabel)"
+            : title
+        return Button {
+            onSelect(index)
+        } label: {
+            HStack(spacing: 12) {
+                Text(String(format: "%02d", index + 1))
+                    .font(.system(size: 11, design: .serif).monospacedDigit())
+                    .foregroundStyle(isCurrent ? palette.accent : palette.ink3)
+                    .frame(width: 24, alignment: .trailing)
+                Text(display)
+                    .font(.system(size: 13.5, weight: isCurrent ? .bold : .regular))
+                    .foregroundStyle(
+                        isCurrent ? palette.accent : (isRead ? palette.ink3 : palette.ink)
+                    )
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if isCurrent {
+                    Text("正在读")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(palette.onAccent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(palette.accent, in: Capsule())
+                } else if isRead {
+                    Text("读过")
+                        .font(.system(size: 10))
+                        .foregroundStyle(palette.ink3)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+                isCurrent ? palette.accentSoft : .clear,
+                in: RoundedRectangle(cornerRadius: 9)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1878,35 +1948,83 @@ struct ReadingSettingsView: View {
     @Binding var fontSize: Double
     @Binding var lineSpacing: Double
 
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("字号") {
-                    HStack {
-                        Text("A")
-                            .font(.caption)
-                        Slider(value: $fontSize, in: 12...28, step: 1)
-                        Text("A")
-                            .font(.title2)
-                    }
-                    .padding(.vertical, 4)
-                }
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.emptyPalette) private var palette
 
-                Section("行距") {
-                    HStack {
-                        Image(systemName: "text.alignleft")
-                            .font(.caption)
-                        Slider(value: $lineSpacing, in: 1.2...2.2, step: 0.1)
-                        Image(systemName: "text.alignleft")
-                            .font(.title3)
-                    }
-                    .padding(.vertical, 4)
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("阅读设置")
+                        .font(.system(size: 17, weight: .black, design: .serif))
+                        .foregroundStyle(palette.ink)
+                    Text("字号 \(Int(fontSize)) · 行距 \(lineSpacing, specifier: "%.1f")")
+                        .font(.system(size: 11))
+                        .foregroundStyle(palette.ink3)
                 }
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Text("×")
+                        .font(.system(size: 14))
+                        .foregroundStyle(palette.ink3)
+                        .frame(width: 28, height: 28)
+                        .background(palette.accentSoft, in: Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .navigationTitle("阅读设置")
-            #if !os(macOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .padding(EdgeInsets(top: 16, leading: 20, bottom: 12, trailing: 16))
+            Rectangle().fill(palette.line).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 16) {
+                settingRow(label: "字号") {
+                    HStack(spacing: 12) {
+                        Text("A").font(.system(size: 11, design: .serif))
+                        Slider(value: $fontSize, in: 12...28, step: 1)
+                            .tint(palette.accent)
+                        Text("A").font(.system(size: 20, design: .serif))
+                    }
+                    .foregroundStyle(palette.ink2)
+                }
+                settingRow(label: "行距") {
+                    HStack(spacing: 12) {
+                        Image(systemName: "text.alignleft").font(.system(size: 10))
+                        Slider(value: $lineSpacing, in: 1.2...2.2, step: 0.1)
+                            .tint(palette.accent)
+                        Image(systemName: "text.alignleft").font(.system(size: 16))
+                    }
+                    .foregroundStyle(palette.ink2)
+                }
+                Text("\u{201C}I went to the woods because I wished to live deliberately…\u{201D}")
+                    .font(.system(size: fontSize * 0.8, design: .serif))
+                    .lineSpacing(fontSize * 0.8 * (lineSpacing - 1))
+                    .foregroundStyle(palette.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .emptyCard(palette, radius: 12)
+            }
+            .padding(EdgeInsets(top: 16, leading: 20, bottom: 20, trailing: 20))
+
+            Spacer(minLength: 0)
+        }
+        .background(palette.window)
+        #if os(iOS)
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+        #endif
+    }
+
+    private func settingRow(
+        label: String,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11, weight: .bold))
+                .kerning(1.6)
+                .foregroundStyle(palette.ink3)
+            content()
         }
     }
 }

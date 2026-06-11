@@ -261,7 +261,7 @@ struct MacReaderScreen: View {
         .sheet(isPresented: $showChapterList) {
             ChapterListView(
                 titles: sectionTitles,
-                listTitle: "Chapters",
+                unitLabel: "章",
                 currentIndex: currentChapterIndex
             ) { index in
                 currentChapterIndex = index
@@ -426,7 +426,7 @@ struct MacReaderScreen: View {
             .sheet(isPresented: $showChapterList) {
                 ChapterListView(
                     titles: sectionTitles,
-                    listTitle: "Pages",
+                    unitLabel: "页",
                     currentIndex: currentChapterIndex
                 ) { index in
                     currentChapterIndex = index

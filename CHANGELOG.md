@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The screens the prototypes never drew now follow the 朱批 design
+  language instead of stock SwiftUI forms: AI 状态 (provider cards,
+  preset chips, vermilion status, 朱批 round-trip result), 目录 (serif
+  header, numbered rows, 读过 dimming, 正在读 chip, auto-scroll to the
+  current chapter), 前情回顾 (朱批 callout result, ensō empty state),
+  高亮列表 (quote cards with gold rule, 生成闪卡 inline progress), and
+  阅读设置 (sliders with live serif preview); app icon added (ensō
+  圆相 · 一点朱, macOS ladder + iOS light/dark/tinted)
 - iOS information architecture follows the prototype: the former
   Library / Notes / Study system tabs and the form-style Ask-the-Book
   sheet are replaced by 书库 / 阅读 / 卡片 + the conversational 朱 sheet
