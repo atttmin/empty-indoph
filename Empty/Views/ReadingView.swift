@@ -41,6 +41,30 @@ nonisolated enum InlineNoteKind: String {
     case companion = "comp"
 }
 
+/// iOS reader text mode — the 原文 / 双语对照 / 导读 cycle behind the
+/// top-bar mode capsule (Mac has its own three-pill `MacReadingMode`).
+nonisolated enum IOSReadingMode: String, CaseIterable {
+    case original
+    case bilingual
+    case companion
+
+    var badge: String {
+        switch self {
+        case .original: "原"
+        case .bilingual: "译"
+        case .companion: "导"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .original: "原文"
+        case .bilingual: "双语对照"
+        case .companion: "导读"
+        }
+    }
+}
+
 /// How bilingual notes lay out: stacked under each paragraph (iOS), or
 /// the prototype's side-by-side parallel text (Mac 双语对照).
 nonisolated enum InlineNoteLayout: String {
@@ -103,10 +127,11 @@ struct ReadingView: View {
     @State private var showControls = true
     @AppStorage("reader.fontSize") private var fontSize: Double = 18
     @AppStorage("reader.lineSpacing") private var lineSpacing: Double = 1.6
-    @State private var isBilingual = false
+    @AppStorage("reader.mode.ios") private var readingMode: IOSReadingMode = .original
     @State private var inlineNotes: [InlineNotePaint] = []
     @State private var inlineCache: [Int: String] = [:]
     @State private var inlineInFlight: Set<Int> = []
+    @State private var pretransTask: Task<Void, Never>?
     @State private var marginNote: String?
     @State private var marginSubject: String?
     @State private var isSelectionWorking = false
@@ -170,6 +195,7 @@ struct ReadingView: View {
         .onAppear(perform: loadBook)
         .onDisappear {
             aloud.stop()
+            pretransTask?.cancel()
             saveProgress()
         }
         .onChange(of: showControls) { _, visible in
@@ -214,7 +240,7 @@ struct ReadingView: View {
                     resumeUTF16Offset: resumeUTF16Offset,
                     chapterPlainText: currentChapterPlainText(),
                     highlights: chapterHighlights,
-                    inlineMode: isBilingual ? .bilingual : .none,
+                    inlineMode: inlineNoteKind,
                     inlineLayout: .stacked,
                     inlineNotes: inlineNotes,
                     selectionActive: pendingSelection != nil,
@@ -299,11 +325,17 @@ struct ReadingView: View {
         .onChange(of: currentChapterIndex) { _, _ in
             resetChapterArtifacts()
             refreshChapterHighlights()
+            // Shift the 预译 window (current + next two chapters).
+            startPretranslation()
         }
-        .onChange(of: isBilingual) { _, _ in
+        .onChange(of: readingMode) { _, _ in
             // The chapter page clears and re-requests notes; cached
-            // translations rejoin instantly.
+            // translations rejoin instantly. The in-memory cache is
+            // per-mode-agnostic by key, so it resets with the mode.
             inlineNotes = []
+            inlineCache = [:]
+            inlineInFlight = []
+            startPretranslation()
         }
         .onChange(of: showHighlights) { _, isShowing in
             if !isShowing { refreshChapterHighlights() }
@@ -449,23 +481,34 @@ struct ReadingView: View {
             Spacer(minLength: 0)
 
             if showsBilingual {
-                Button {
-                    isBilingual.toggle()
+                Menu {
+                    ForEach(IOSReadingMode.allCases, id: \.self) { mode in
+                        Button {
+                            readingMode = mode
+                        } label: {
+                            if mode == readingMode {
+                                Label(mode.title, systemImage: "checkmark")
+                            } else {
+                                Text(mode.title)
+                            }
+                        }
+                    }
                 } label: {
-                    Text("译")
+                    Text(readingMode == .original ? "译" : readingMode.badge)
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(isBilingual ? palette.onAccent : palette.accent)
+                        .foregroundStyle(readingMode != .original ? palette.onAccent : palette.accent)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(isBilingual ? palette.accent : .clear, in: Capsule())
+                        .background(readingMode != .original ? palette.accent : .clear, in: Capsule())
                         .overlay(
                             Capsule().strokeBorder(
-                                isBilingual ? palette.accent : palette.accentSoft2,
+                                readingMode != .original ? palette.accent : palette.accentSoft2,
                                 lineWidth: 1
                             )
                         )
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
                 .accessibilityIdentifier("reader.toggleBilingual")
             }
 
@@ -828,13 +871,30 @@ struct ReadingView: View {
         inlineNotes = []
     }
 
-    // MARK: 双语对照 (译)
+    // MARK: 双语对照 / 导读 (译 · 导)
+
+    private var inlineNoteKind: InlineNoteKind {
+        switch readingMode {
+        case .original: .none
+        case .bilingual: .bilingual
+        case .companion: .companion
+        }
+    }
+
+    private static func translationKind(for mode: IOSReadingMode) -> TranslationKind {
+        mode == .companion ? .companion : .bilingual
+    }
+
+    private static func aiNoteKind(for mode: IOSReadingMode) -> AIInlineNoteKind {
+        mode == .companion ? .companion : .bilingual
+    }
 
     /// Translates the visible paragraphs the chapter page reports, in
     /// reading order. Resolution: in-memory → persistent cache (the
     /// 「不重复翻译」 rule — reopening a book never re-translates) → AI.
     private func handleVisibleParagraphs(_ paragraphs: [ReaderParagraph]) {
-        guard isBilingual else { return }
+        let mode = readingMode
+        guard mode != .original else { return }
         let chapter = currentChapterIndex
         let store = TranslationStore(modelContext: modelContext)
         var missing: [ReaderParagraph] = []
@@ -847,7 +907,7 @@ struct ReadingView: View {
                 }
             } else if let persisted = store.lookup(
                 bookID: book.id,
-                kind: .bilingual,
+                kind: Self.translationKind(for: mode),
                 text: paragraph.text
             ) {
                 inlineCache[key] = persisted
@@ -860,14 +920,18 @@ struct ReadingView: View {
             }
         }
         guard !missing.isEmpty else { return }
-        Task { await translateParagraphs(missing, chapter: chapter) }
+        Task { await translateParagraphs(missing, chapter: chapter, mode: mode) }
     }
 
     private func inlineNoteKey(chapter: Int, idx: Int) -> Int {
         chapter << 16 | idx
     }
 
-    private func translateParagraphs(_ paragraphs: [ReaderParagraph], chapter: Int) async {
+    private func translateParagraphs(
+        _ paragraphs: [ReaderParagraph],
+        chapter: Int,
+        mode: IOSReadingMode
+    ) async {
         let resolution = AIProviderSettings.load().resolveUsableService()
         guard resolution.service.availability.isAvailable else {
             for paragraph in paragraphs {
@@ -878,26 +942,27 @@ struct ReadingView: View {
         for paragraph in paragraphs {
             let key = inlineNoteKey(chapter: chapter, idx: paragraph.idx)
             defer { inlineInFlight.remove(key) }
-            // Reader moved on — skip the model call, leave it uncached.
-            guard isBilingual, currentChapterIndex == chapter else { continue }
+            // Reader moved on (or switched modes) — skip the model call.
+            guard readingMode == mode, currentChapterIndex == chapter else { continue }
             do {
                 let text = try await AITransientRetry.run {
                     try await resolution.service.inlineNote(
                         for: paragraph.text,
-                        kind: .bilingual
+                        kind: Self.aiNoteKind(for: mode)
                     )
                 }.trimmingCharacters(in: .whitespacesAndNewlines)
-                inlineCache[key] = text
                 if !text.isEmpty {
                     TranslationStore(modelContext: modelContext).store(
                         text,
                         bookID: book.id,
                         chapterIndex: chapter,
-                        kind: .bilingual,
+                        kind: Self.translationKind(for: mode),
                         text: paragraph.text
                     )
                 }
-                if isBilingual, currentChapterIndex == chapter, !text.isEmpty {
+                guard readingMode == mode else { continue }
+                inlineCache[key] = text
+                if currentChapterIndex == chapter, !text.isEmpty {
                     inlineNotes.append(InlineNotePaint(idx: paragraph.idx, text: text))
                 }
             } catch {
@@ -905,8 +970,70 @@ struct ReadingView: View {
                 // should retry on the next settled viewport report, not
                 // retire the paragraph for this visit.
                 guard !AITransientRetry.isTransient(error) else { continue }
-                inlineCache[key] = ""
+                if readingMode == mode {
+                    inlineCache[key] = ""
+                }
             }
+        }
+    }
+
+    /// Background pre-translation (双语对照 only, like the Mac reader):
+    /// fills the persistent cache for the current and next two chapters
+    /// so paging forward never waits on the model. 导读 stays
+    /// per-viewport — paraphrasing a whole book ahead of the reader
+    /// would burn tokens on chapters that may never be read that way.
+    private func startPretranslation() {
+        pretransTask?.cancel()
+        guard readingMode == .bilingual, book.format == .epub else { return }
+        let chapter = currentChapterIndex
+        pretransTask = Task { await pretranslate(from: chapter) }
+    }
+
+    private func pretranslate(from startChapter: Int) async {
+        let resolution = AIProviderSettings.load().resolveUsableService()
+        guard resolution.service.availability.isAvailable else { return }
+        let store = TranslationStore(modelContext: modelContext)
+        let bookID = book.id
+        let chapters = (try? modelContext.fetch(
+            FetchDescriptor<Chapter>(
+                predicate: #Predicate { $0.bookID == bookID },
+                sortBy: [SortDescriptor(\.index)]
+            )
+        )) ?? []
+
+        let window = chapters.filter {
+            $0.index >= startChapter && $0.index < startChapter + 3
+        }
+        for chapter in window {
+            guard !Task.isCancelled, readingMode == .bilingual else { return }
+            guard chapter.pretranslatedAt == nil else { continue }
+            let paragraphs = TranslationStore.paragraphs(in: chapter.text)
+            guard !paragraphs.isEmpty else {
+                chapter.pretranslatedAt = Date()
+                try? modelContext.save()
+                continue
+            }
+            for paragraph in paragraphs {
+                guard !Task.isCancelled, readingMode == .bilingual else { return }
+                guard store.lookup(bookID: bookID, kind: .bilingual, text: paragraph) == nil else {
+                    continue
+                }
+                guard let text = try? await resolution.service.inlineNote(
+                    for: paragraph,
+                    kind: .bilingual
+                ).trimmingCharacters(in: .whitespacesAndNewlines),
+                      !text.isEmpty
+                else { continue }
+                store.store(
+                    text,
+                    bookID: bookID,
+                    chapterIndex: chapter.index,
+                    kind: .bilingual,
+                    text: paragraph
+                )
+            }
+            chapter.pretranslatedAt = Date()
+            try? modelContext.save()
         }
     }
 
@@ -987,6 +1114,7 @@ struct ReadingView: View {
                 }
                 isLoading = false
                 startSession()
+                startPretranslation()
             } catch {
                 loadError = error.localizedDescription
                 isLoading = false
