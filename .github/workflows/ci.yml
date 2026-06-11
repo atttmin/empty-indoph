@@ -19,6 +19,11 @@ jobs:
         run: xcodebuild -version
 
       - name: Build and run unit tests
+        env:
+          # GitHub-hosted runners ship an older macOS SDK than this project's
+          # default 26.2 target. Override for CI so builds run on macos-latest.
+          MACOSX_DEPLOYMENT_TARGET: "15.0"
+          IPHONEOS_DEPLOYMENT_TARGET: "18.0"
         run: |
           set -o pipefail
           xcodebuild test \
