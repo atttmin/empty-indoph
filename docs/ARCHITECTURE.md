@@ -27,15 +27,12 @@
 | 模型 | 用途 |
 |------|------|
 | `Book` | 书库元数据、封面、阅读位置 |
-| `Highlight` | 高亮锚点与文本快照 |
+| `Highlight` | 高亮锚点、文本快照与批注 |
 | `ReadingSession` | 阅读会话起止位置 |
 | `VocabEntry` | 词汇与间隔复习状态 |
+| `StudyCardEntry` | 问答卡 / 链接卡 / 复习卡 |
 
-当前 `syncedDatabase = .none`。启用 CloudKit 步骤：
-
-1. Xcode → Signing & Capabilities → **+ iCloud** → 勾选 CloudKit
-2. 将 `AppStores.swift` 中 `syncedDatabase` 改为 `.automatic`
-3. 确保模型符合 CloudKit 约束（已遵循：无 unique 约束、关系 optional）
+CloudKit 同步**已启用**（`syncedDatabase = .automatic`，`Empty.entitlements` 含 iCloud capability）。容器初始化失败时（本机未登录 iCloud、关闭签名的测试环境等），自动以 `cloudKitDatabase: .none` 重建同一组磁盘 store——应用照常工作，仅不同步。
 
 ### Local Store（仅本机）
 
@@ -43,6 +40,7 @@
 |------|------|
 | `Chapter` | 章节纯文本（从 EPUB 解析） |
 | `Chunk` | 分块文本 + 可选 sentence embedding |
+| `ParagraphTranslation` | 双语 / 导读译文持久缓存（按稳定文本哈希键控，见 `TranslationStore`） |
 
 跨 store 关联：**仅通过 `Book.id`（UUID）**，不使用 SwiftData 跨 store relationship。
 
@@ -66,17 +64,20 @@ Library.import()               # 写入 Book + Chapter（双 store）
 BookIndexer.ensureChunks()     # 按需分块，写入 Chunk
     │
     ▼
-ReadingView / MacReaderScreen  # WebKit 渲染 + 分页 + 高亮桥接
+ReadingView / MacReaderScreen  # 原生 SwiftUI 渲染（块模型 + 纵向滚动）
 ```
+
+### 原生渲染（无 WebView）
+
+EPUB 章节不经 WebView：`NativeChapterParser`（`XMLParser`）把 XHTML 解析为标题 / 段落 / 引文 / 列表 / 图片块（`NativeChapterDocument`，畸形输入回退纯文本逐段切分），由 `NativeChapterReaderView` 以 `ScrollView + LazyVStack` 渲染。每个文本块是原生 `NSTextView` / `UITextView`，段内精确划词；「跨段」面板（`NativeChapterSelectionSheet`）把整章放进单个可选文本视图覆盖跨段选取，并自动定位当前阅读位置。每个块解析出章内精确 UTF-16 范围（`NativeTextBlockSpan`）：高亮按范围绘制、选区带前后文锚定、可见段落经 SwiftUI preference 上报（驱动双语 / 导读逐段翻译），插入译文不会触发任何 reflow / 滚动跳动。
 
 ### 高亮锚定
 
-[`HighlightStore`](../Empty/Services/HighlightStore.swift) 使用 UTF-16 偏移 + 选区前后各 32 字符的 prefix/suffix 快照，在章节重解析后仍能定位高亮。
+[`HighlightStore`](../Empty/Services/HighlightStore.swift) 存精确 UTF-16 偏移 + 原文快照，定位经 `PlainTextSearch` 以选区前后文消歧；快照保证偏移漂移时高亮仍可读。高亮列表支持写 / 编辑批注与精确跳回锚点。
 
 ### 阅读位置
 
-`ReadingPosition` 包含 `chapterIndex` 与 `utf16Offset`。  
-**当前限制：** UI 层 `saveProgress()` 仅更新章节索引，`utf16Offset` 固定为 0，防剧透粒度实际为章级。
+`ReadingPosition` 包含 `chapterIndex` 与 `utf16Offset`。阅读器滚动时上报最远可见字符，防剧透粒度为**章内字符级**；续读按存储偏移落回文本块内的精确进度。
 
 ---
 
@@ -103,20 +104,29 @@ ReadingView / MacReaderScreen  # WebKit 渲染 + 分页 + 高亮桥接
 |------|------|
 | `summarize(_:focus:)` | 摘要 / Recap / 论证骨架 |
 | `answer(question:groundedIn:)` | 基于已检索段落的 grounded 回答 |
-| `flashcards(from:maxCount:)` | 闪卡生成（服务已实现，UI 待接） |
+| `inlineNote(for:kind:)` | 双语 / 导读逐段翻译（纯文本路径；瞬态错误经 `AITransientRetry` 退避重试） |
+| `flashcards(from:maxCount:)` | 闪卡生成（高亮列表 / 伴读内可存为卡片） |
+| `toolStep(toolDocs:transcript:)` | 阅读 agent 单步决策（调用工具或收尾作答） |
 
-实现：
+实现（云端 BYOK 提供**两套标准**）：
 
-- [`FoundationModelsAIService`](../Empty/Services/FoundationModelsAIService.swift) — 本机，map-reduce 超长文本
-- [`CloudAIService`](../Empty/Services/CloudAIService.swift) — OpenAI 兼容 chat completions
+- [`FoundationModelsAIService`](../Empty/Services/FoundationModelsAIService.swift) — 本机，map-reduce 超长文本；agent 步骤用 `@Generable` guided generation
+- [`CloudAIService`](../Empty/Services/CloudAIService.swift) — OpenAI 兼容 chat completions（DeepSeek 预设）；端点拒绝 JSON mode 时降级重试一次
+- [`AnthropicAIService`](../Empty/Services/AnthropicAIService.swift) — Anthropic Messages API（Kimi Code 预设），复用云端 JSON 解析器
 
-路由：[`AIProviderSettings.resolveUsableService()`](../Empty/Services/AIProviderSettings.swift)  
-本机不可用时自动回退云端（若已配置 Key）。
+路由：[`AIProviderSettings.resolveUsableService()`](../Empty/Services/AIProviderSettings.swift)，`cloudProtocol` 切换接口标准；本机不可用时自动回退云端（若已配置 Key）。
+
+### 阅读 Agent
+
+[`ReadingAgent`](../Empty/Services/ReadingAgent.swift)（有界循环：本机 ≤3 步 / 云端 ≤4 步）经 `AIService.toolStep` 驱动 [`ReadingToolbox`](../Empty/Services/ReadingToolbox.swift) 的六个工具（search_passages / recap_progress / explain / find_link / add_vocab / make_flashcards）。读操作全部走防剧透检索；写操作只产出 `CompanionAction` **提案**，读者在伴读面板 / 朱 sheet 确认后才落库；步骤轨迹随答案展示，任一步失败回退 grounded 问答。
 
 ### 语义索引
 
-[`SemanticIndexer`](../Empty/Services/SemanticIndexer.swift) actor 在后台为 Chunk 写入 embedding。  
-依赖 `NLEmbedding.sentenceEmbedding(for: .english)`，目前以英文为主，由 `AskBookView` 触发。
+[`SemanticIndexer`](../Empty/Services/SemanticIndexer.swift) actor 在后台为 Chunk 写入**语言感知**的 sentence embedding（按文本主导语言选模型，中文支持，见 `SemanticScorer.embeddingModel`），由伴读问答的索引管线按需触发。
+
+### 预译缓存
+
+[`TranslationStore`](../Empty/Services/TranslationStore.swift) 以稳定文本哈希（FNV-1a，空白归一化）为键持久化每段译文（`ParagraphTranslation`，本地 store）。双语模式下 Mac 预译当前章及后两章（含章节标题，`Chapter.pretranslatedAt` 标记），重开书零重译；☰ 目录展示每章预译状态与全书缓存量。
 
 ---
 
@@ -129,13 +139,13 @@ EmptyApp
 │   ├── MacReaderScreen (+ MacCompanionPanel)
 │   ├── MacNotesScreen
 │   └── MacVocabScreen
-└── iOS   → LibraryView → ReadingView
-              ├── RecapView
-              ├── AskBookView
-              └── HighlightsListView
+└── iOS   → IOSRootView（书库 / 阅读 / 卡片 + 「朱」半屏伴读 sheet）
+              ├── IOSLibraryScreen
+              ├── ReadingView / PDFReaderView
+              └── IOSCardsScreen
 ```
 
-Mac 阅读器额外功能：双语模式、边注、思维链接、TTS（[`ReadingAloud`](../Empty/Services/ReadingAloud.swift)）。
+Mac 阅读器额外功能：双语对照（左右分栏 + 预译缓存）、导读、结构化章节概览、☰ 目录面板、边注、思维链接、跨段选取、TTS（[`ReadingAloud`](../Empty/Services/ReadingAloud.swift)）。
 
 ---
 
@@ -148,7 +158,7 @@ Mac 阅读器额外功能：双语模式、边注、思维链接、TTS（[`Readi
 | 分块 / 检索 / 防剧透 | 高 | Swift Testing |
 | 云端 AI JSON | 高 | 纯函数解析测试 |
 | 本机 Foundation Models | 低 | 硬件依赖，未纳入 CI |
-| SwiftUI 视图 | 极低 | UITests 为模板 |
+| SwiftUI 视图 | 截图冒烟 | XCUITest 确定性截屏（`-ScreenshotSeed` 播种演示书，产出 README 用图） |
 
 测试容器使用 `AppStores.makeContainer(ephemeral: true)` 隔离并行测试。
 
@@ -158,10 +168,9 @@ Mac 阅读器额外功能：双语模式、边注、思维链接、TTS（[`Readi
 
 | 项目 | 状态 |
 |------|------|
-| PDF 阅读 | 未实现 |
-| 章内 utf16Offset | 模型支持，UI 未上报 |
-| CloudKit | 已预留，未启用 |
-| 闪卡 UI | 服务有，界面无 |
-| iOS 词汇/笔记 | Mac 独有 |
-| Mac 笔记屏 AI 建议 | 部分为静态文案 |
-| 语义 embedding | 英文 NLEmbedding，非全局后台索引 |
+| 复杂 EPUB 排版（表格、脚注、内嵌样式） | 原生块模型降级为纯文本段落渲染 |
+| 跨段划词 | 直接拖选限单个文本块，跨段经「跨段」整章面板完成 |
+| iCloud entitlement 签名 | 个人开发账号本地跑测试需 `CODE_SIGNING_ALLOWED=NO` |
+| 本机 Foundation Models 测试 | 硬件依赖，未纳入 CI |
+| visionOS | 可编译，无专属 UI |
+| 语义 embedding | 语言感知（中 / 英），按需索引而非全局后台任务 |
