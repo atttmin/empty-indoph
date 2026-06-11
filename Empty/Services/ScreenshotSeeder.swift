@@ -10,11 +10,28 @@ import Foundation
 import SwiftData
 
 enum ScreenshotSeeder {
+    @discardableResult
     @MainActor
-    static func seedDemoBookIfNeeded(modelContext: ModelContext) throws {
-        guard ProcessInfo.processInfo.arguments.contains("-ScreenshotSeed") else { return }
-        guard try modelContext.fetchCount(FetchDescriptor<Book>()) == 0 else { return }
+    static func seedDemoBookIfNeeded(modelContext: ModelContext) throws -> Book? {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-ScreenshotSeed") else { return nil }
+        let descriptor = FetchDescriptor<Book>(
+            sortBy: [SortDescriptor(\Book.lastOpenedAt, order: .reverse)]
+        )
+        let existing = try modelContext.fetch(descriptor)
+        let book = try existing.first(where: isDemoBook) ?? importDemoBook(modelContext: modelContext)
+        if args.contains("-ScreenshotSeedHighlight") {
+            try seedDemoHighlightIfNeeded(book: book, modelContext: modelContext)
+        }
+        return book
+    }
 
+    private static func isDemoBook(_ book: Book) -> Bool {
+        book.title == "思维之书" && book.author == "测试作者"
+    }
+
+    @MainActor
+    private static func importDemoBook(modelContext: ModelContext) throws -> Book {
         let temp = FileManager.default.temporaryDirectory
             .appending(path: "EmptyScreenshot-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
@@ -24,8 +41,25 @@ enum ScreenshotSeeder {
         try DemoEPUB.data().write(to: epubURL)
 
         let store = try BookFileStore.makeDefault()
-        _ = try Library(modelContext: modelContext, fileStore: store)
+        return try Library(modelContext: modelContext, fileStore: store)
             .importBook(from: epubURL)
+    }
+
+    @MainActor
+    private static func seedDemoHighlightIfNeeded(
+        book: Book,
+        modelContext: ModelContext
+    ) throws {
+        let store = HighlightStore(modelContext: modelContext)
+        if try store.highlights(for: book).contains(where: { $0.textSnapshot.contains("深读始于空白") }) {
+            return
+        }
+        let highlight = try store.createHighlight(
+            book: book,
+            chapterIndex: 0,
+            selection: "深读始于空白"
+        )
+        try store.updateNote(highlight, note: "第一条测试批注。")
     }
 }
 

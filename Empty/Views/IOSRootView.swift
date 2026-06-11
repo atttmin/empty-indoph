@@ -71,12 +71,13 @@ struct IOSRootView: View {
     }
 
     private func applyLaunchOverrides() {
-        try? ScreenshotSeeder.seedDemoBookIfNeeded(modelContext: modelContext)
+        let seeded = try? ScreenshotSeeder.seedDemoBookIfNeeded(modelContext: modelContext)
         let args = ProcessInfo.processInfo.arguments
-        let seeded = try? modelContext.fetch(
+        let fallback = try? modelContext.fetch(
             FetchDescriptor<Book>(sortBy: [SortDescriptor(\.lastOpenedAt, order: .reverse)])
         ).first
-        if args.contains("-OpenReader"), let book = seeded {
+        let book = seeded ?? fallback
+        if args.contains("-OpenReader"), let book {
             openBook = book
             tab = .reader
         } else if args.contains("-OpenTabReader") {

@@ -121,6 +121,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   honors `-ScreenshotSeed` like iOS, and the screenshot UI tests seed/open the
   demo book through launch arguments instead of relying on whatever book
   happened to be in the library.
+
+- Native reader smoke tests previously depended on an empty local library,
+  repo-writable screenshot paths, and brittle chrome labels: screenshot
+  seeding now guarantees the demo book (plus an optional deterministic
+  highlight), reader chrome exposes stable accessibility IDs for automation,
+  and the UI smoke suite now exercises the native highlight sheet / jump-back
+  flow on both macOS and iOS.
 ### Added (earlier rounds)
 
 - iOS 随身伴读 aligned with the 02 iOS prototype:

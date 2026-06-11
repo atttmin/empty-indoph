@@ -9,6 +9,9 @@
 import XCTest
 
 final class ScreenshotTests: XCTestCase {
+    private let demoBookTitle = "思维之书"
+    private let demoHighlightText = "深读始于空白"
+
     private let outputDirectory: URL = {
         if let override = ProcessInfo.processInfo.environment["SCREENSHOT_OUTPUT_DIR"] {
             return URL(fileURLWithPath: override, isDirectory: true)
@@ -34,7 +37,7 @@ final class ScreenshotTests: XCTestCase {
         let libraryTitle = app.staticTexts["书库"]
         XCTAssertTrue(libraryTitle.waitForExistence(timeout: 8))
 
-        let seededBook = app.staticTexts["思维之书"].firstMatch
+        let seededBook = app.staticTexts[demoBookTitle].firstMatch
         XCTAssertTrue(seededBook.waitForExistence(timeout: 8))
 
         try saveScreenshot(named: "mac-library", from: app)
@@ -48,10 +51,29 @@ final class ScreenshotTests: XCTestCase {
 
         let readerChrome = app.buttons["‹ 书库"]
         XCTAssertTrue(readerChrome.waitForExistence(timeout: 12))
-        XCTAssertTrue(app.staticTexts["思维之书"].firstMatch.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts[demoBookTitle].firstMatch.waitForExistence(timeout: 4))
 
         sleep(2)
         try saveScreenshot(named: "mac-reader", from: app)
+    }
+
+    @MainActor
+    func testCaptureMacHighlights() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ScreenshotSeed", "-ScreenshotSeedHighlight", "-OpenReader"]
+        app.launch()
+
+        let openHighlights = app.buttons["reader.highlights"]
+        XCTAssertTrue(openHighlights.waitForExistence(timeout: 12))
+        openHighlights.tap()
+
+        assertHighlightSheet(in: app)
+        try saveScreenshot(named: "mac-highlights", from: app)
+
+        let jump = app.buttons["跳回原文"].firstMatch
+        XCTAssertTrue(jump.waitForExistence(timeout: 8))
+        jump.tap()
+        XCTAssertTrue(app.buttons["‹ 书库"].waitForExistence(timeout: 8))
     }
 
     #if os(iOS)
@@ -63,7 +85,7 @@ final class ScreenshotTests: XCTestCase {
 
         let libraryTitle = app.staticTexts["书库"]
         XCTAssertTrue(libraryTitle.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["思维之书"].firstMatch.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts[demoBookTitle].firstMatch.waitForExistence(timeout: 8))
 
         sleep(1)
         try saveScreenshot(named: "ios-library", from: app)
@@ -75,7 +97,7 @@ final class ScreenshotTests: XCTestCase {
         app.launchArguments = ["-ScreenshotSeed"]
         app.launch()
 
-        let seededBook = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "思维之书")).firstMatch
+        let seededBook = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", demoBookTitle)).firstMatch
         XCTAssertTrue(seededBook.waitForExistence(timeout: 12))
         seededBook.tap()
 
@@ -85,7 +107,40 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         try saveScreenshot(named: "ios-reading", from: app)
     }
+
+    @MainActor
+    func testCaptureIOSHighlights() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ScreenshotSeed", "-ScreenshotSeedHighlight"]
+        app.launch()
+
+        let seededBook = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", demoBookTitle)).firstMatch
+        XCTAssertTrue(seededBook.waitForExistence(timeout: 12))
+        seededBook.tap()
+
+        let overflow = app.buttons["reader.overflow"]
+        XCTAssertTrue(overflow.waitForExistence(timeout: 12))
+        overflow.tap()
+
+        let menuHighlight = app.buttons["高亮"].firstMatch
+        XCTAssertTrue(menuHighlight.waitForExistence(timeout: 8))
+        menuHighlight.tap()
+
+        assertHighlightSheet(in: app)
+        try saveScreenshot(named: "ios-highlights", from: app)
+
+        let jump = app.buttons["跳回原文"].firstMatch
+        XCTAssertTrue(jump.waitForExistence(timeout: 8))
+        jump.tap()
+        XCTAssertTrue(app.buttons["‹"].waitForExistence(timeout: 8))
+    }
     #endif
+
+    private func assertHighlightSheet(in app: XCUIApplication) {
+        XCTAssertTrue(app.staticTexts["高亮 · 朱批"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["跳回原文"].firstMatch.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["编辑批注"].firstMatch.waitForExistence(timeout: 8))
+    }
 
     private func saveScreenshot(named name: String, from app: XCUIApplication) throws {
         let screenshot = app.screenshot()

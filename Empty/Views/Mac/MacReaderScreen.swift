@@ -47,14 +47,14 @@ struct MacReaderScreen: View {
     @State private var showRecap = false
     @State private var showHighlights = false
     @State private var recapCache: RecapCache?
-    @State private var fontSize: Double = 18
-    @State private var lineSpacing: Double = 1.8
+    @AppStorage("reader.fontSize") private var fontSize: Double = 18
+    @AppStorage("reader.lineSpacing") private var lineSpacing: Double = 1.8
     @State private var pendingSelection: ReaderSelection?
     @State private var chapterHighlights: [HighlightPaint] = []
     @State private var showChapterSelection = false
     @State private var isCompanionOpen = false
     @State private var companion: CompanionModel
-    @State private var readingMode: MacReadingMode = .original
+    @AppStorage("reader.mode.mac") private var readingMode: MacReadingMode = .original
     @State private var summaryOpen = true
     @State private var chapterSummary = ""
     @State private var isSummaryLoading = false
@@ -607,8 +607,8 @@ struct MacReaderScreen: View {
             }
             .buttonStyle(.plain)
 
-            pillButton("目录") { showChapterList = true }
-            pillButton("高亮") { showHighlights = true }
+            pillButton("目录", identifier: "reader.chapterList") { showChapterList = true }
+            pillButton("高亮", identifier: "reader.highlights") { showHighlights = true }
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -904,7 +904,7 @@ struct MacReaderScreen: View {
             }
             .buttonStyle(.plain)
 
-            pillButton("高亮") { showHighlights = true }
+            pillButton("高亮", identifier: "reader.highlights") { showHighlights = true }
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -940,7 +940,11 @@ struct MacReaderScreen: View {
         return nil
     }
 
-    private func pillButton(_ title: String, action: @escaping () -> Void) -> some View {
+    private func pillButton(
+        _ title: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12))
@@ -951,6 +955,7 @@ struct MacReaderScreen: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 
     private func bottomBar(_ epub: EPUBBook) -> some View {
@@ -1541,6 +1546,9 @@ struct MacReaderScreen: View {
                     syncPageProgress(at: currentChapterIndex)
                 }
                 isLoading = false
+                inlineAIUnavailable = readingMode != .original
+                    && !AIProviderSettings.load().resolveUsableService()
+                        .service.availability.isAvailable
                 startSession()
                 startPretranslation()
                 await loadChapterSummary()

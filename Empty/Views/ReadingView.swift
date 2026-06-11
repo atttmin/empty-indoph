@@ -101,8 +101,8 @@ struct ReadingView: View {
     @State private var showChapterSelection = false
     @State private var saveErrorMessage: String?
     @State private var showControls = true
-    @State private var fontSize: Double = 18
-    @State private var lineSpacing: Double = 1.6
+    @AppStorage("reader.fontSize") private var fontSize: Double = 18
+    @AppStorage("reader.lineSpacing") private var lineSpacing: Double = 1.6
     @State private var isBilingual = false
     @State private var inlineNotes: [InlineNotePaint] = []
     @State private var inlineCache: [Int: String] = [:]
@@ -431,6 +431,7 @@ struct ReadingView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("reader.back")
 
             Spacer(minLength: 0)
 
@@ -465,6 +466,7 @@ struct ReadingView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("reader.toggleBilingual")
             }
 
             Button {
@@ -477,12 +479,17 @@ struct ReadingView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("reader.aloud")
 
             Menu {
                 Button("目录", systemImage: "list.bullet") { showChapterList = true }
+                    .accessibilityIdentifier("reader.menu.chapterList")
                 Button("高亮", systemImage: "highlighter") { showHighlights = true }
+                    .accessibilityIdentifier("reader.menu.highlights")
                 Button("前情回顾", systemImage: "sparkles") { showRecap = true }
+                    .accessibilityIdentifier("reader.menu.recap")
                 Button("阅读设置", systemImage: "textformat.size") { showSettings = true }
+                    .accessibilityIdentifier("reader.menu.settings")
             } label: {
                 Text("⋯")
                     .font(.system(size: 15, weight: .bold))
@@ -490,6 +497,7 @@ struct ReadingView: View {
                     .padding(.horizontal, 4)
                     .contentShape(Rectangle())
             }
+            .accessibilityIdentifier("reader.overflow")
             .menuStyle(.button)
             .buttonStyle(.plain)
         }
