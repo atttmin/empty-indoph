@@ -24,6 +24,7 @@ struct AIDiagnosticsView: View {
     @State private var summary = ""
     @State private var errorMessage = ""
     @State private var isRunning = false
+    @State private var language = LanguageSettings.load()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,6 +44,9 @@ struct AIDiagnosticsView: View {
 
                     sectionLabel("按功能分配")
                     featureRouting
+
+                    sectionLabel("语言")
+                    languageCard
 
                     sectionLabel("读者记忆")
                     memoryCard
@@ -75,6 +79,161 @@ struct AIDiagnosticsView: View {
         }
         .onChange(of: apiKey) { _, newValue in
             persistAPIKey(newValue)
+        }
+    }
+
+    // MARK: 语言 (全局 — 本书覆盖在阅读器 Aa 面板底部)
+
+    private var languageCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // 目标语言
+            VStack(alignment: .leading, spacing: 6) {
+                Text("目标语言 — 译文、释义、朱的回答都跟随")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .kerning(0.8)
+                    .foregroundStyle(palette.ink3)
+                HStack(spacing: 8) {
+                    ForEach(LanguageSettings.targetOptions, id: \.id) { option in
+                        languageChip(
+                            option.native,
+                            isActive: language.target == option.id
+                        ) {
+                            language.target = option.id
+                        }
+                    }
+                }
+            }
+
+            // 源语言
+            VStack(alignment: .leading, spacing: 6) {
+                Text("源语言")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .kerning(0.8)
+                    .foregroundStyle(palette.ink3)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        languageChip(
+                            "自动识别（推荐）",
+                            isActive: language.source == .auto
+                        ) {
+                            language.source = .auto
+                        }
+                        ForEach(LanguageSettings.sourceOptions, id: \.id) { option in
+                            languageChip(
+                                option.label,
+                                isActive: language.source == .manual(option.id)
+                            ) {
+                                language.source = .manual(option.id)
+                            }
+                        }
+                    }
+                }
+                Text("自动识别按段落判断 — 混排书里的外文引文各自决定要不要译。已是目标语言的段落自动跳过，不出译块。")
+                    .font(.system(size: 10.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(palette.ink3)
+            }
+
+            // 作用范围
+            VStack(alignment: .leading, spacing: 8) {
+                Text("作用范围")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .kerning(0.8)
+                    .foregroundStyle(palette.ink3)
+                scopeRow("译文", fixed: "跟随目标")
+                scopeCycleRow(
+                    "释义",
+                    value: language.vocabTarget
+                ) { language.vocabTarget = $0 }
+                scopeCycleRow(
+                    "朱的回答",
+                    value: language.chatTarget
+                ) { language.chatTarget = $0 }
+            }
+        }
+        .padding(14)
+        .emptyCard(palette, radius: 12)
+        .onChange(of: language) { _, newValue in
+            newValue.save()
+        }
+    }
+
+    private func languageChip(
+        _ title: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5, weight: isActive ? .bold : .regular))
+                .foregroundStyle(isActive ? palette.accent : palette.ink2)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(isActive ? palette.accentSoft : palette.side, in: Capsule())
+                .overlay(
+                    Capsule().strokeBorder(
+                        isActive ? palette.accentSoft2 : palette.line2,
+                        lineWidth: 1
+                    )
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func scopeRow(_ title: String, fixed: String) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 12.5))
+                .foregroundStyle(palette.ink2)
+                .frame(width: 92, alignment: .leading)
+            Text(fixed)
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(palette.ink3)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(palette.side, in: Capsule())
+                .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+            Spacer()
+        }
+    }
+
+    /// 跟随目标 → 各固定目标语言 → 跟随目标, like the feature-routing
+    /// capsules: tap to cycle.
+    private func scopeCycleRow(
+        _ title: String,
+        value: String?,
+        update: @escaping (String?) -> Void
+    ) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 12.5))
+                .foregroundStyle(palette.ink2)
+                .frame(width: 92, alignment: .leading)
+            Button {
+                let options = LanguageSettings.targetOptions.map(\.id)
+                if let value, let index = options.firstIndex(of: value) {
+                    update(index + 1 < options.count ? options[index + 1] : nil)
+                } else {
+                    update(options.first)
+                }
+            } label: {
+                Text(value.map { "固定 · \(LanguageSettings.displayName(for: $0))" } ?? "跟随目标")
+                    .font(.system(size: 11.5, weight: .bold))
+                    .foregroundStyle(value == nil ? palette.ink3 : palette.accent)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .background(palette.side, in: Capsule())
+                    .overlay(
+                        Capsule().strokeBorder(
+                            value == nil ? palette.line2 : palette.accentSoft2,
+                            lineWidth: 1
+                        )
+                    )
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            Spacer()
         }
     }
 

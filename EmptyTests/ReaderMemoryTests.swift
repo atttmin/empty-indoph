@@ -144,7 +144,11 @@ private final class NullAIService: AIService, @unchecked Sendable {
     func answer(question: String, groundedIn: [GroundedPassage]) async throws -> GroundedAnswer {
         GroundedAnswer(text: "", citedPassageIDs: [])
     }
-    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String { "" }
+    func inlineNote(
+        for text: String,
+        kind: AIInlineNoteKind,
+        targetLanguage: String
+    ) async throws -> String { "" }
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] { [] }
     func toolStep(toolDocs: String, transcript: String) async throws -> AgentStep {
         .finish(answer: "")

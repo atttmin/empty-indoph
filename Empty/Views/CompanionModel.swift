@@ -76,6 +76,13 @@ final class CompanionModel {
                 }
 
                 let resolution = AIProviderRegistry.load().resolveUsableService(feature: .chat)
+                // 朱的回答 follows the目标语言 unless 作用范围 fixes it —
+                // declared on the question itself so both the agent path
+                // and the RAG fallback inherit it.
+                let answerLanguage = LanguageSettings.promptName(
+                    for: LanguageSettings.effective(for: book.id).resolvedChatTarget()
+                )
+                let directedQuestion = "\(question)\n\n(Respond in \(answerLanguage).)"
                 // Agent first: the model decides which reading tools to
                 // use. Any failure falls back to plain grounded RAG so the
                 // companion never dead-ends.
@@ -91,7 +98,7 @@ final class CompanionModel {
                         service: resolution.service,
                         maxSteps: resolution.provider.isLocal ? 3 : 4
                     )
-                    let reply = try await agent.run(question: question)
+                    let reply = try await agent.run(question: directedQuestion)
                     messages.append(Message(
                         role: .ai,
                         text: reply.text,
@@ -104,6 +111,7 @@ final class CompanionModel {
                 } catch {
                     try await legacyAnswer(
                         question: question,
+                        answerLanguage: answerLanguage,
                         book: book,
                         position: position,
                         modelContext: modelContext,
@@ -122,8 +130,11 @@ final class CompanionModel {
     }
 
     /// The pre-agent pipeline: spoiler-safe retrieval + one grounded answer.
+    /// `answerLanguage` rides only on the model question — the retrieval
+    /// query and the saved-card question stay clean.
     private func legacyAnswer(
         question: String,
+        answerLanguage: String? = nil,
         book: Book,
         position: ReadingPosition,
         modelContext: ModelContext,
@@ -143,7 +154,7 @@ final class CompanionModel {
         }
         let passages = chunks.map { GroundedPassage(id: $0.ordinal, text: $0.text) }
         let answer = try await service.answer(
-            question: question,
+            question: answerLanguage.map { "\(question)\n\n(Respond in \($0).)" } ?? question,
             groundedIn: passages
         )
         let citedChunk = answer.citedPassageIDs

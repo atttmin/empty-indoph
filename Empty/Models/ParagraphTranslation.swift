@@ -29,6 +29,10 @@ final class ParagraphTranslation {
     var kindRawValue: String
     /// `TranslationStore.hash` of the normalized source text.
     var textHash: String
+    /// Target language (BCP-47-ish) the translation was made into —
+    /// caches for different目标语言 never collide. Legacy rows default
+    /// to 简中, which is what they were.
+    var target: String = "zh-Hans"
     var translation: String
     var createdAt: Date
 
@@ -41,6 +45,7 @@ final class ParagraphTranslation {
         chapterIndex: Int,
         kind: TranslationKind,
         textHash: String,
+        target: String = "zh-Hans",
         translation: String,
         createdAt: Date = Date()
     ) {
@@ -48,6 +53,7 @@ final class ParagraphTranslation {
         self.chapterIndex = chapterIndex
         self.kindRawValue = kind.rawValue
         self.textHash = textHash
+        self.target = target
         self.translation = translation
         self.createdAt = createdAt
     }

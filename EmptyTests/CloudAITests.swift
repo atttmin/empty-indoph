@@ -95,7 +95,7 @@ struct CloudAITests {
             kind: .bilingual,
             text: "Our life is frittered away by detail."
         )
-        #expect(prompt.contains("Output only the generated Chinese text"))
+        #expect(prompt.contains("Output only the generated Simplified Chinese text"))
         #expect(prompt.contains("Do not include JSON"))
         #expect(prompt.contains("Text:\nOur life is frittered away by detail."))
     }

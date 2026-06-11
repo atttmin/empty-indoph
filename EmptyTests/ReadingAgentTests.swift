@@ -83,7 +83,11 @@ private final class ScriptedAIService: AIService, @unchecked Sendable {
         GroundedAnswer(text: fallbackAnswer, citedPassageIDs: [])
     }
 
-    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+    func inlineNote(
+        for text: String,
+        kind: AIInlineNoteKind,
+        targetLanguage: String
+    ) async throws -> String {
         fallbackAnswer
     }
 

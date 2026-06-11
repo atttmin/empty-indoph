@@ -35,7 +35,12 @@ struct TranslationStore {
 
     // MARK: Lookup / store
 
-    func lookup(bookID: UUID, kind: TranslationKind, text: String) -> String? {
+    func lookup(
+        bookID: UUID,
+        kind: TranslationKind,
+        text: String,
+        target: String = "zh-Hans"
+    ) -> String? {
         let textHash = Self.hash(text)
         let kindRaw = kind.rawValue
         var descriptor = FetchDescriptor<ParagraphTranslation>(
@@ -43,6 +48,7 @@ struct TranslationStore {
                 $0.bookID == bookID
                     && $0.kindRawValue == kindRaw
                     && $0.textHash == textHash
+                    && $0.target == target
             }
         )
         descriptor.fetchLimit = 1
@@ -56,7 +62,8 @@ struct TranslationStore {
         bookID: UUID,
         chapterIndex: Int,
         kind: TranslationKind,
-        text: String
+        text: String,
+        target: String = "zh-Hans"
     ) {
         let trimmed = translation.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -67,6 +74,7 @@ struct TranslationStore {
                 $0.bookID == bookID
                     && $0.kindRawValue == kindRaw
                     && $0.textHash == textHash
+                    && $0.target == target
             }
         )
         descriptor.fetchLimit = 1
@@ -78,6 +86,7 @@ struct TranslationStore {
                 chapterIndex: chapterIndex,
                 kind: kind,
                 textHash: textHash,
+                target: target,
                 translation: trimmed
             ))
         }

@@ -93,7 +93,11 @@ final class CloudAIService: AIService {
         return try Self.groundedAnswer(fromContent: content, includedIDs: includedIDs)
     }
 
-    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+    func inlineNote(
+        for text: String,
+        kind: AIInlineNoteKind,
+        targetLanguage: String
+    ) async throws -> String {
         try ensureAvailable()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AIServiceError.emptyInput }
@@ -101,7 +105,7 @@ final class CloudAIService: AIService {
             throw AIServiceError.inputTooLarge
         }
         let content = try await chat(
-            user: AIInlineNotePrompt.user(kind: kind, text: trimmed),
+            user: AIInlineNotePrompt.user(kind: kind, text: trimmed, targetLanguage: targetLanguage),
             jsonResponse: false
         )
         let note = content.trimmingCharacters(in: .whitespacesAndNewlines)

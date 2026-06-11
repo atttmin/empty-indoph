@@ -59,12 +59,16 @@ struct VocabStore {
     ) async throws -> VocabEntry {
         let resolution = AIProviderRegistry.load().resolveUsableService(feature: .vocab)
         let service = resolution.service
+        // 释义 follows the global目标语言 unless 作用范围 fixes it.
+        let glossLanguage = LanguageSettings.promptName(
+            for: LanguageSettings.load().resolvedVocabTarget()
+        )
         let question = """
-        Explain the word "\(word)" as used in the sentence below. Reply in Chinese \
+        Explain the word "\(word)" as used in the sentence below. Reply in \(glossLanguage) \
         with four short lines:
         PHONETIC: IPA pronunciation
         POS: part of speech (e.g. n., v., adj.)
-        MEANING: concise Chinese gloss for this context
+        MEANING: concise \(glossLanguage) gloss for this context
         NOTE: one sentence of nuance (what it does NOT mean here, or a cross-book echo)
         """
         let answer = try await service.answer(

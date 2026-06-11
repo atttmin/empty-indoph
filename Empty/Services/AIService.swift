@@ -49,28 +49,34 @@ nonisolated enum AIInlineNoteKind: Sendable {
 }
 
 nonisolated enum AIInlineNotePrompt {
-    static func user(kind: AIInlineNoteKind, text: String) -> String {
+    static func user(
+        kind: AIInlineNoteKind,
+        text: String,
+        targetLanguage: String = "zh-Hans"
+    ) -> String {
+        let language = LanguageSettings.promptName(for: targetLanguage)
         let instruction = switch kind {
         case .bilingual:
-            // 今译 lens: language-adaptive. Foreign text translates;
-            // classical/literary Chinese modernizes; text that is ALREADY
-            // plain modern Chinese has nothing to translate — say so with
-            // a sentinel the client suppresses (a Chinese book must never
-            // show its own text duplicated as a "translation").
-            "今译: If the paragraph is not Chinese, translate it into natural, literary Simplified Chinese. If it is classical/literary Chinese (文言、半文言、旧白话), render it in plain modern Chinese. If it is ALREADY plain modern Chinese, output exactly 「原文即白话」 and nothing else."
+            // 今译 lens: language-adaptive. Foreign text translates into
+            // the target; classical/literary Chinese modernizes when the
+            // target is Chinese; text ALREADY in the target language has
+            // nothing to translate — say so with a sentinel the client
+            // suppresses (a book must never show its own text duplicated
+            // as a "translation").
+            "今译: If the paragraph is not in \(language), translate it into natural, literary \(language). If the target is Chinese and the paragraph is classical/literary Chinese (文言、半文言、旧白话), render it in plain modern \(language). If the paragraph is ALREADY in plain \(language), output exactly 「原文即白话」 and nothing else."
         case .companion:
             // 导读 is a margin note, NOT a retell — the chapter overview
             // already summarizes content. Point at what the paragraph is
             // DOING and what deserves a pause.
-            "你是页边的朱批（导读）。不要复述或翻译这段话——读者看得见原文。指出:这一段在做什么（立论/转折/铺垫/反驳/抒情），以及一个值得读者停下来想的点。最多两句，口吻克制，像一位老编辑的旁注。"
+            "你是页边的朱批（导读）。不要复述或翻译这段话——读者看得见原文。指出:这一段在做什么（立论/转折/铺垫/反驳/抒情），以及一个值得读者停下来想的点。最多两句，口吻克制，像一位老编辑的旁注。Respond in \(language)."
         case .debate:
-            "You are a Socratic sparring partner (辩难). Pose one or two sharp counter-questions in Simplified Chinese that challenge this paragraph's claim or assumption. Ask only — never answer them, never explain, never take a side."
+            "You are a Socratic sparring partner (辩难). Pose one or two sharp counter-questions in \(language) that challenge this paragraph's claim or assumption. Ask only — never answer them, never explain, never take a side."
         case .sources:
-            "You are a classical-commentary companion (文献). In Simplified Chinese, cite at most two RELEVANT passages from public-domain works (classics, traditional commentaries, pre-1928 texts) that echo or illuminate this paragraph. Format each as 「书名」：引文 — never invent sources; if nothing genuinely fits, output exactly 暂无可靠文献参照。"
+            "You are a classical-commentary companion (文献). In \(language), cite at most two RELEVANT passages from public-domain works (classics, traditional commentaries, pre-1928 texts) that echo or illuminate this paragraph. Format each as 「书名」：引文 — never invent sources; if nothing genuinely fits, output exactly 暂无可靠文献参照。"
         }
         return """
         \(instruction)
-        Output only the generated Chinese text. Do not include JSON, labels, bullets, or commentary about your task.
+        Output only the generated \(language) text. Do not include JSON, labels, bullets, or commentary about your task.
 
         Text:
         \(text)
@@ -261,11 +267,15 @@ protocol AIService: Sendable {
     /// book-grounded.
     func answer(question: String, groundedIn passages: [GroundedPassage]) async throws -> GroundedAnswer
 
-    /// Generates a plain paragraph translation or 导读 note. Unlike
-    /// `answer(question:groundedIn:)`, this path deliberately does not ask
-    /// for JSON; inline reading notes should not fail because a model chose
-    /// prose over a citation envelope.
-    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String
+    /// Generates a plain paragraph translation or 导读 note into the
+    /// target language. Unlike `answer(question:groundedIn:)`, this path
+    /// deliberately does not ask for JSON; inline reading notes should
+    /// not fail because a model chose prose over a citation envelope.
+    func inlineNote(
+        for text: String,
+        kind: AIInlineNoteKind,
+        targetLanguage: String
+    ) async throws -> String
 
     /// Drafts up to `maxCount` study cards from a passage.
     func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard]
@@ -275,6 +285,13 @@ protocol AIService: Sendable {
     /// guided generation (a 3B model can't be trusted with free-form
     /// JSON); cloud providers use JSON mode.
     func toolStep(toolDocs: String, transcript: String) async throws -> AgentStep
+}
+
+extension AIService {
+    /// Convenience: 简中 target (the pre-语言设置 behavior).
+    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+        try await inlineNote(for: text, kind: kind, targetLanguage: "zh-Hans")
+    }
 }
 
 extension AIService {

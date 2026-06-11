@@ -388,7 +388,8 @@ struct MacReaderScreen: View {
                 lineSpacing: $lineSpacing,
                 theme: $readerTheme,
                 font: $readerFont,
-                pageTurn: $pageTurn
+                pageTurn: $pageTurn,
+                bookID: book.id
             )
             .frame(minWidth: 340, minHeight: 460)
         }
@@ -605,7 +606,8 @@ struct MacReaderScreen: View {
                     lineSpacing: $lineSpacing,
                     theme: $readerTheme,
                     font: $readerFont,
-                    pageTurn: $pageTurn
+                    pageTurn: $pageTurn,
+                    bookID: book.id
                 )
                 .frame(minWidth: 340, minHeight: 460)
             }
@@ -1350,8 +1352,19 @@ struct MacReaderScreen: View {
         let mode = readingMode
         let chapter = currentChapterIndex
         let store = TranslationStore(modelContext: modelContext)
+        let language = LanguageSettings.effective(for: book.id)
         var missing: [ReaderParagraph] = []
         for paragraph in paragraphs {
+            // 同语言跳过 (always on): a paragraph already in the target
+            // language gets no 译块. Detection is per-paragraph, so a
+            // mixed-language book's quotes each decide for themselves.
+            if mode == .bilingual,
+               LanguageDetect.matchesTarget(
+                textLanguage: LanguageDetect.sourceLanguage(of: paragraph.text, settings: language),
+                target: language.target
+               ) {
+                continue
+            }
             let key = inlineKey(mode, chapter, paragraph.idx)
             if let cached = inlineCache[key] {
                 if !cached.isEmpty {
@@ -1368,7 +1381,8 @@ struct MacReaderScreen: View {
             } else if let persisted = store.lookup(
                 bookID: book.id,
                 kind: translationKind,
-                text: paragraph.text
+                text: paragraph.text,
+                target: language.target
             ) {
                 inlineCache[key] = persisted
                 if !inlineNotes.contains(where: { $0.idx == paragraph.idx }) {
@@ -1397,6 +1411,7 @@ struct MacReaderScreen: View {
         }
         let inlineKind = Self.aiNoteKind(for: mode)
         let kind = Self.translationKind(for: mode)
+        let language = LanguageSettings.effective(for: book.id)
         for paragraph in paragraphs {
             let key = inlineKey(mode, chapter, paragraph.idx)
             defer { inlineInFlight.remove(key) }
@@ -1406,7 +1421,8 @@ struct MacReaderScreen: View {
                 let text = try await AITransientRetry.run {
                     try await resolution.service.inlineNote(
                         for: paragraph.text,
-                        kind: inlineKind
+                        kind: inlineKind,
+                        targetLanguage: language.target
                     )
                 }.trimmingCharacters(in: .whitespacesAndNewlines)
                 // Echoes (same-language "translations") and the 今译
@@ -1422,7 +1438,8 @@ struct MacReaderScreen: View {
                     bookID: book.id,
                     chapterIndex: chapter,
                     kind: kind,
-                    text: paragraph.text
+                    text: paragraph.text,
+                    target: language.target
                 )
                 cacheStatsTick += 1
                 if readingMode == mode, currentChapterIndex == chapter {
@@ -1469,6 +1486,7 @@ struct MacReaderScreen: View {
         guard !resolution.provider.isLocal else { return }
         let store = TranslationStore(modelContext: modelContext)
         let bookID = book.id
+        let language = LanguageSettings.effective(for: bookID)
         let chapters = (try? modelContext.fetch(
             FetchDescriptor<Chapter>(
                 predicate: #Predicate { $0.bookID == bookID },
@@ -1483,7 +1501,9 @@ struct MacReaderScreen: View {
             guard let title = chapter.title,
                   !title.isEmpty,
                   tocTitleTranslations[chapter.index] == nil else { continue }
-            if let cached = store.lookup(bookID: bookID, kind: .title, text: title) {
+            if let cached = store.lookup(
+                bookID: bookID, kind: .title, text: title, target: language.target
+            ) {
                 tocTitleTranslations[chapter.index] = cached
                 continue
             }
@@ -1491,11 +1511,19 @@ struct MacReaderScreen: View {
             // mis-formats and would surface as a missing translation.
             guard let note = try? await resolution.service.inlineNote(
                 for: title,
-                kind: .bilingual
+                kind: .bilingual,
+                targetLanguage: language.target
             ) else { continue }
             let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
-            store.store(text, bookID: bookID, chapterIndex: chapter.index, kind: .title, text: title)
+            store.store(
+                text,
+                bookID: bookID,
+                chapterIndex: chapter.index,
+                kind: .title,
+                text: title,
+                target: language.target
+            )
             tocTitleTranslations[chapter.index] = text
         }
 
@@ -1512,8 +1540,16 @@ struct MacReaderScreen: View {
             // provider hiccup skipped paragraphs in an earlier pass) —
             // the cheap local lookups below re-check and backfill them.
             let paragraphs = TranslationStore.paragraphs(in: chapter.text)
-            let missing = paragraphs.filter {
-                store.lookup(bookID: bookID, kind: .bilingual, text: $0) == nil
+            let missing = paragraphs.filter { paragraph in
+                // 同语言跳过: target-language paragraphs need no 译文 and
+                // must not count as holes (or backfill would loop forever).
+                if LanguageDetect.matchesTarget(
+                    textLanguage: LanguageDetect.sourceLanguage(of: paragraph, settings: language),
+                    target: language.target
+                ) { return false }
+                return store.lookup(
+                    bookID: bookID, kind: .bilingual, text: paragraph, target: language.target
+                ) == nil
             }
             guard !missing.isEmpty else {
                 if chapter.pretranslatedAt == nil {
@@ -1529,7 +1565,8 @@ struct MacReaderScreen: View {
                 guard !Task.isCancelled, readingMode == .bilingual else { return }
                 if let text = try? await resolution.service.inlineNote(
                     for: paragraph,
-                    kind: .bilingual
+                    kind: .bilingual,
+                    targetLanguage: language.target
                     ).trimmingCharacters(in: .whitespacesAndNewlines),
                     InlineNoteQuality.isWorthShowing(note: text, original: paragraph) {
                     store.store(
@@ -1537,7 +1574,8 @@ struct MacReaderScreen: View {
                         bookID: bookID,
                         chapterIndex: chapter.index,
                         kind: .bilingual,
-                        text: paragraph
+                        text: paragraph,
+                        target: language.target
                     )
                 }
                 done += 1
@@ -1598,7 +1636,8 @@ struct MacReaderScreen: View {
                 modeGuideText = try await AITransientRetry.run {
                     try await resolution.service.inlineNote(
                         for: clipped,
-                        kind: .bilingual
+                        kind: .bilingual,
+                        targetLanguage: LanguageSettings.effective(for: book.id).target
                     )
                 }
             } else {

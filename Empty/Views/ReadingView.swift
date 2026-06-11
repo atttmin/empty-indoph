@@ -362,7 +362,8 @@ struct ReadingView: View {
                 lineSpacing: $lineSpacing,
                 theme: $readerTheme,
                 font: $readerFont,
-                pageTurn: $pageTurn
+                pageTurn: $pageTurn,
+                bookID: self.book.id
             )
             #if os(iOS)
             .presentationDetents([.medium])
@@ -1144,8 +1145,19 @@ struct ReadingView: View {
         guard mode != .original else { return }
         let chapter = currentChapterIndex
         let store = TranslationStore(modelContext: modelContext)
+        let language = LanguageSettings.effective(for: book.id)
         var missing: [ReaderParagraph] = []
         for paragraph in paragraphs {
+            // 同语言跳过 (always on): a paragraph already in the target
+            // language gets no 译块. Detection is per-paragraph, so a
+            // mixed-language book's quotes each decide for themselves.
+            if mode == .bilingual,
+               LanguageDetect.matchesTarget(
+                textLanguage: LanguageDetect.sourceLanguage(of: paragraph.text, settings: language),
+                target: language.target
+               ) {
+                continue
+            }
             let key = inlineNoteKey(chapter: chapter, idx: paragraph.idx)
             if let cached = inlineCache[key] {
                 if !cached.isEmpty {
@@ -1162,7 +1174,8 @@ struct ReadingView: View {
             } else if let persisted = store.lookup(
                 bookID: book.id,
                 kind: Self.translationKind(for: mode),
-                text: paragraph.text
+                text: paragraph.text,
+                target: language.target
             ) {
                 inlineCache[key] = persisted
                 if !inlineNotes.contains(where: { $0.idx == paragraph.idx }) {
@@ -1193,6 +1206,7 @@ struct ReadingView: View {
             }
             return
         }
+        let language = LanguageSettings.effective(for: book.id)
         for paragraph in paragraphs {
             let key = inlineNoteKey(chapter: chapter, idx: paragraph.idx)
             defer { inlineInFlight.remove(key) }
@@ -1202,7 +1216,8 @@ struct ReadingView: View {
                 let text = try await AITransientRetry.run {
                     try await resolution.service.inlineNote(
                         for: paragraph.text,
-                        kind: Self.aiNoteKind(for: mode)
+                        kind: Self.aiNoteKind(for: mode),
+                        targetLanguage: language.target
                     )
                 }.trimmingCharacters(in: .whitespacesAndNewlines)
                 // Echoes (same-language "translations") and the 今译
@@ -1216,7 +1231,8 @@ struct ReadingView: View {
                         bookID: book.id,
                         chapterIndex: chapter,
                         kind: Self.translationKind(for: mode),
-                        text: paragraph.text
+                        text: paragraph.text,
+                        target: language.target
                     )
                 }
                 guard readingMode == mode else { continue }
@@ -1270,6 +1286,7 @@ struct ReadingView: View {
         guard !resolution.provider.isLocal else { return }
         let store = TranslationStore(modelContext: modelContext)
         let bookID = book.id
+        let language = LanguageSettings.effective(for: bookID)
         let chapters = (try? modelContext.fetch(
             FetchDescriptor<Chapter>(
                 predicate: #Predicate { $0.bookID == bookID },
@@ -1286,8 +1303,16 @@ struct ReadingView: View {
             // provider hiccup skipped paragraphs in an earlier pass) —
             // the cheap local lookups below re-check and backfill them.
             let paragraphs = TranslationStore.paragraphs(in: chapter.text)
-            let missing = paragraphs.filter {
-                store.lookup(bookID: bookID, kind: .bilingual, text: $0) == nil
+            let missing = paragraphs.filter { paragraph in
+                // 同语言跳过: target-language paragraphs need no 译文 and
+                // must not count as holes (or backfill would loop forever).
+                if LanguageDetect.matchesTarget(
+                    textLanguage: LanguageDetect.sourceLanguage(of: paragraph, settings: language),
+                    target: language.target
+                ) { return false }
+                return store.lookup(
+                    bookID: bookID, kind: .bilingual, text: paragraph, target: language.target
+                ) == nil
             }
             guard !missing.isEmpty else {
                 if chapter.pretranslatedAt == nil {
@@ -1300,7 +1325,8 @@ struct ReadingView: View {
                 guard !Task.isCancelled, readingMode == .bilingual else { return }
                 guard let text = try? await resolution.service.inlineNote(
                     for: paragraph,
-                    kind: .bilingual
+                    kind: .bilingual,
+                    targetLanguage: language.target
                     ).trimmingCharacters(in: .whitespacesAndNewlines),
                     InlineNoteQuality.isWorthShowing(note: text, original: paragraph)
                 else { continue }
@@ -1309,7 +1335,8 @@ struct ReadingView: View {
                     bookID: bookID,
                     chapterIndex: chapter.index,
                     kind: .bilingual,
-                    text: paragraph
+                    text: paragraph,
+                    target: language.target
                 )
             }
             chapter.pretranslatedAt = Date()
@@ -1623,6 +1650,11 @@ struct ReadingSettingsView: View {
     @Binding var theme: ReaderTheme
     @Binding var font: ReaderFont
     var pageTurn: Binding<ReaderPageTurn>? = nil
+    /// When set, the panel offers 本书覆盖 — a per-book目标语言 kept on
+    /// the book dimension (the global default lives in AI 状态 → 语言).
+    var bookID: UUID? = nil
+
+    @State private var bookTargetOverride: String?
 
     @AppStorage("reader.traditional") private var traditionalChinese = false
     @AppStorage("reader.pdf.invert") private var pdfInvert = false
@@ -1716,6 +1748,23 @@ struct ReadingSettingsView: View {
                         #endif
                     }
                 }
+                if bookID != nil {
+                    settingRow(label: "本书语言") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    bookLanguageChip("跟随全局", target: nil)
+                                    ForEach(LanguageSettings.targetOptions, id: \.id) { option in
+                                        bookLanguageChip(option.native, target: option.id)
+                                    }
+                                }
+                            }
+                            Text("只改这一本的目标语言；全局默认在 AI 状态 → 语言。")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(palette.ink3)
+                        }
+                    }
+                }
                 Text("\u{201C}I went to the woods because I wished to live deliberately…\u{201D}")
                     .font(.system(size: fontSize * 0.8, design: .serif))
                     .lineSpacing(fontSize * 0.8 * (lineSpacing - 1))
@@ -1733,6 +1782,31 @@ struct ReadingSettingsView: View {
         .presentationDetents([.large, .medium])
         .presentationDragIndicator(.visible)
         #endif
+        .onAppear {
+            if let bookID {
+                bookTargetOverride = LanguageSettings.bookOverride(for: bookID)?.target
+            }
+        }
+    }
+
+    private func bookLanguageChip(_ title: String, target: String?) -> some View {
+        let isActive = bookTargetOverride == target
+        return Button {
+            guard let bookID else { return }
+            bookTargetOverride = target
+            var override = LanguageSettings.bookOverride(for: bookID)
+                ?? LanguageSettings.BookOverride()
+            override.target = target
+            LanguageSettings.setBookOverride(override, for: bookID)
+        } label: {
+            Text(title)
+                .font(.system(size: 11.5, weight: isActive ? .bold : .regular))
+                .foregroundStyle(isActive ? palette.onAccent : palette.ink2)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(isActive ? palette.accent : palette.side, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private func optionChip(_ title: String, isOn: Binding<Bool>) -> some View {

@@ -63,6 +63,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 语言设置 (per the 语言设置原型 design): a global目标语言 (简中/繁中/
+  English/日本語) that 译文、释义、朱的回答 all follow, with 作用范围 rows
+  to fix 释义 or 朱的回答 to a different language. 源语言 defaults to
+  per-paragraph auto-detection (NLLanguageRecognizer — mixed-language
+  books translate each quote correctly) with an optional manual override.
+  同语言跳过 is always on: paragraphs already in the target language get
+  no 译块, and pre-translation skips them instead of looping on them as
+  "holes". Translation caches are keyed by target language so switching
+  targets never collides with old rows (legacy rows count as 简中). 本书
+  覆盖 lives at the bottom of the reader's 阅读设置 panel — one book can
+  run 法→英 while the global target stays 中文; the global section lives
+  in AI 状态 → 语言
 - Two cloud standards behind the same `AIService` protocol: the existing
   OpenAI-compatible `CloudAIService` plus a native Anthropic Messages API
   client (`AnthropicAIService`) — `system` param, content blocks,

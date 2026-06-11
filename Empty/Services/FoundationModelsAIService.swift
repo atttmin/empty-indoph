@@ -121,7 +121,11 @@ final class FoundationModelsAIService: AIService {
         )
     }
 
-    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+    func inlineNote(
+        for text: String,
+        kind: AIInlineNoteKind,
+        targetLanguage: String
+    ) async throws -> String {
         try ensureAvailable()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AIServiceError.emptyInput }
@@ -129,7 +133,7 @@ final class FoundationModelsAIService: AIService {
             throw AIServiceError.inputTooLarge
         }
         let note = try await respond(
-            to: AIInlineNotePrompt.user(kind: kind, text: trimmed)
+            to: AIInlineNotePrompt.user(kind: kind, text: trimmed, targetLanguage: targetLanguage)
         )
         guard !note.isEmpty else { throw AIServiceError.invalidResponse }
         return note
@@ -334,7 +338,11 @@ final class FoundationModelsAIService: AIService {
         return GroundedAnswer(text: "", citedPassageIDs: [])
     }
 
-    func inlineNote(for text: String, kind: AIInlineNoteKind) async throws -> String {
+    func inlineNote(
+        for text: String,
+        kind: AIInlineNoteKind,
+        targetLanguage: String
+    ) async throws -> String {
         try ensureAvailable()
         return ""
     }
