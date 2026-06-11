@@ -156,6 +156,9 @@ struct ReadingView: View {
     @State private var chapterPageInfo: (page: Int, count: Int)?
     @State private var activityMeter = ReadingActivityMeter()
     @AppStorage("reader.aloud.autonext") private var aloudAutoNext = false
+    @AppStorage("reader.pdf.invert") private var pdfNightInverted = false
+    @AppStorage("reader.traditional") private var traditionalChinese = false
+    @State private var traditionalCache: [Int: (chapter: EPUBChapter, plain: String?)] = [:]
     @StateObject private var aloud = ReadingAloud()
 
     init(
@@ -238,13 +241,13 @@ struct ReadingView: View {
 
     private func scrollingReader(_ book: EPUBBook) -> some View {
         NativeChapterReaderView(
-            chapter: book.chapters[currentChapterIndex],
+            chapter: displayChapter(book.chapters[currentChapterIndex]),
             basePath: book.basePath,
             fontSize: fontSize,
             lineSpacing: lineSpacing,
             landing: chapterLanding,
             resumeUTF16Offset: resumeUTF16Offset,
-            chapterPlainText: currentChapterPlainText(),
+            chapterPlainText: displayChapterPlainText(),
             highlights: chapterHighlights,
             inlineMode: inlineNoteKind,
             inlineLayout: .stacked,
@@ -282,13 +285,13 @@ struct ReadingView: View {
                     #if os(iOS)
                     if pageTurn == .paged {
                         PagedChapterReaderView(
-                            chapter: book.chapters[currentChapterIndex],
+                            chapter: displayChapter(book.chapters[currentChapterIndex]),
                             basePath: book.basePath,
                             fontSize: fontSize,
                             lineSpacing: lineSpacing,
                             landing: chapterLanding,
                             resumeUTF16Offset: resumeUTF16Offset,
-                            chapterPlainText: currentChapterPlainText(),
+                            chapterPlainText: displayChapterPlainText(),
                             highlights: chapterHighlights,
                             inlineMode: inlineNoteKind,
                             inlineNotes: inlineNotes,
@@ -388,6 +391,12 @@ struct ReadingView: View {
             // Shift the 预译 window (current + next two chapters).
             startPretranslation()
         }
+        .onChange(of: traditionalChinese) { _, _ in
+            traditionalCache = [:]
+            inlineNotes = []
+            inlineCache = [:]
+            inlineInFlight = []
+        }
         .onChange(of: readingMode) { _, _ in
             // The chapter page clears and re-requests notes; cached
             // translations rejoin instantly. The in-memory cache is
@@ -438,6 +447,8 @@ struct ReadingView: View {
                         documentURL: documentURL,
                         pageIndex: $currentChapterIndex,
                         highlights: chapterHighlights,
+                        nightInverted: pdfNightInverted,
+                        zoomMemoryKey: "pdf.zoom.\(book.id.uuidString)",
                         onPageChange: syncPageProgress,
                         onSelectionChange: { handleSelectionChange($0) }
                     )
@@ -1265,6 +1276,33 @@ struct ReadingView: View {
         ).first?.text
     }
 
+    // MARK: 繁体显示 (render-layer, EPUB only)
+
+    /// The chapter as displayed: traditional-converted (cached per
+    /// chapter) when the 繁体 toggle is on. Source files never change.
+    private func displayChapter(_ chapter: EPUBChapter) -> EPUBChapter {
+        guard traditionalChinese else { return chapter }
+        if let cached = traditionalCache[currentChapterIndex] {
+            return cached.chapter
+        }
+        let converted = EPUBChapter(
+            title: ChineseVariant.traditional(chapter.title),
+            href: chapter.href,
+            content: ChineseVariant.traditional(chapter.content)
+        )
+        let plain = currentChapterPlainText().map(ChineseVariant.traditional)
+        traditionalCache[currentChapterIndex] = (converted, plain)
+        return converted
+    }
+
+    private func displayChapterPlainText() -> String? {
+        guard traditionalChinese else { return currentChapterPlainText() }
+        if let cached = traditionalCache[currentChapterIndex] {
+            return cached.plain
+        }
+        return currentChapterPlainText().map(ChineseVariant.traditional)
+    }
+
     private func updateUTF16Offset(domPrefix: String) {
         guard let plainText = currentChapterPlainText() else { return }
         let offset = PlainTextSearch.utf16Offset(
@@ -1516,6 +1554,10 @@ struct ReadingSettingsView: View {
     @Binding var font: ReaderFont
     var pageTurn: Binding<ReaderPageTurn>? = nil
 
+    @AppStorage("reader.traditional") private var traditionalChinese = false
+    @AppStorage("reader.pdf.invert") private var pdfInvert = false
+    @AppStorage("reader.pdf.twoup") private var pdfTwoUp = false
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.emptyPalette) private var palette
 
@@ -1589,6 +1631,15 @@ struct ReadingSettingsView: View {
                         .labelsHidden()
                     }
                 }
+                settingRow(label: "繁简 · PDF") {
+                    HStack(spacing: 8) {
+                        optionChip("繁体显示", isOn: $traditionalChinese)
+                        optionChip("PDF 夜间反色", isOn: $pdfInvert)
+                        #if os(macOS)
+                        optionChip("PDF 双页", isOn: $pdfTwoUp)
+                        #endif
+                    }
+                }
                 Text("\u{201C}I went to the woods because I wished to live deliberately…\u{201D}")
                     .font(.system(size: fontSize * 0.8, design: .serif))
                     .lineSpacing(fontSize * 0.8 * (lineSpacing - 1))
@@ -1606,6 +1657,23 @@ struct ReadingSettingsView: View {
         .presentationDetents([.large, .medium])
         .presentationDragIndicator(.visible)
         #endif
+    }
+
+    private func optionChip(_ title: String, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            Text(title)
+                .font(.system(size: 11.5, weight: isOn.wrappedValue ? .bold : .regular))
+                .foregroundStyle(isOn.wrappedValue ? palette.onAccent : palette.ink2)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(
+                    isOn.wrappedValue ? palette.accent : palette.side,
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private func fontChip(_ choice: ReaderFont) -> some View {

@@ -24,6 +24,12 @@ struct PDFReaderView: View {
     let documentURL: URL
     @Binding var pageIndex: Int
     var highlights: [HighlightPaint] = []
+    /// 夜间反色 (smart-ish: hue-rotated so colors keep their identity).
+    var nightInverted: Bool = false
+    /// Per-book zoom memory: UserDefaults key, nil disables.
+    var zoomMemoryKey: String? = nil
+    /// 双页 spread (Mac).
+    var twoUp: Bool = false
     var onPageChange: (Int) -> Void = { _ in }
     var onSelectionChange: (ReaderSelection?) -> Void = { _ in }
 
@@ -32,9 +38,23 @@ struct PDFReaderView: View {
             documentURL: documentURL,
             pageIndex: $pageIndex,
             highlights: highlights,
+            zoomMemoryKey: zoomMemoryKey,
+            twoUp: twoUp,
             onPageChange: onPageChange,
             onSelectionChange: onSelectionChange
         )
+        .colorInvert(enabled: nightInverted)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func colorInvert(enabled: Bool) -> some View {
+        if enabled {
+            self.colorInvert().hueRotation(.degrees(180))
+        } else {
+            self
+        }
     }
 }
 
@@ -90,6 +110,8 @@ nonisolated enum PDFSelectionContext {
 final class PDFReaderCoordinator: NSObject {
     var pageIndex: Int = 0
     var paints: [HighlightPaint] = []
+    /// 按书缩放记忆: persisted scale factor under this defaults key.
+    var zoomMemoryKey: String?
     var onPageChange: (Int) -> Void = { _ in }
     var onSelectionChange: (ReaderSelection?) -> Void = { _ in }
 
@@ -116,6 +138,14 @@ final class PDFReaderCoordinator: NSObject {
             self.onPageChange(index)
         })
         observations.append(NotificationCenter.default.addObserver(
+            forName: .PDFViewScaleChanged,
+            object: pdfView,
+            queue: .main
+        ) { [weak self, weak pdfView] _ in
+            guard let self, let pdfView, let key = self.zoomMemoryKey else { return }
+            UserDefaults.standard.set(Double(pdfView.scaleFactor), forKey: key)
+        })
+        observations.append(NotificationCenter.default.addObserver(
             forName: .PDFViewSelectionChanged,
             object: pdfView,
             queue: .main
@@ -139,6 +169,16 @@ final class PDFReaderCoordinator: NSObject {
         observations.removeAll()
         selectionDebounce?.cancel()
         selectionDebounce = nil
+    }
+
+    /// Restores the book's remembered zoom (must run after the document
+    /// is set; `autoScales` wins until a stored value exists).
+    func restoreZoom(in pdfView: PDFView) {
+        guard let key = zoomMemoryKey else { return }
+        let stored = UserDefaults.standard.double(forKey: key)
+        guard stored > 0.05 else { return }
+        pdfView.autoScales = false
+        pdfView.scaleFactor = CGFloat(stored)
     }
 
     func applyPage(in pdfView: PDFView, index: Int) {
@@ -221,6 +261,8 @@ struct PDFReaderRepresentable: UIViewRepresentable {
     let documentURL: URL
     @Binding var pageIndex: Int
     let highlights: [HighlightPaint]
+    var zoomMemoryKey: String? = nil
+    var twoUp: Bool = false
     let onPageChange: (Int) -> Void
     let onSelectionChange: (ReaderSelection?) -> Void
 
@@ -231,23 +273,29 @@ struct PDFReaderRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
         pdfView.autoScales = true
-        pdfView.displayMode = .singlePage
+        pdfView.displayMode = twoUp ? .twoUp : .singlePage
         pdfView.displayDirection = .horizontal
         pdfView.usePageViewController(true, withViewOptions: nil)
         pdfView.backgroundColor = .clear
         pdfView.document = PDFDocument(url: documentURL)
         context.coordinator.pageIndex = pageIndex
         context.coordinator.paints = highlights
+        context.coordinator.zoomMemoryKey = zoomMemoryKey
         syncCallbacks(context.coordinator)
         context.coordinator.attach(to: pdfView)
         context.coordinator.applyPage(in: pdfView, index: pageIndex)
         context.coordinator.applyHighlights(on: pdfView)
+        context.coordinator.restoreZoom(in: pdfView)
         return pdfView
     }
 
     func updateUIView(_ pdfView: PDFView, context: Context) {
         if pdfView.document?.documentURL != documentURL {
             pdfView.document = PDFDocument(url: documentURL)
+        }
+        let mode: PDFDisplayMode = twoUp ? .twoUp : .singlePage
+        if pdfView.displayMode != mode {
+            pdfView.displayMode = mode
         }
         syncCallbacks(context.coordinator)
         if context.coordinator.pageIndex != pageIndex {
@@ -277,6 +325,8 @@ struct PDFReaderRepresentable: NSViewRepresentable {
     let documentURL: URL
     @Binding var pageIndex: Int
     let highlights: [HighlightPaint]
+    var zoomMemoryKey: String? = nil
+    var twoUp: Bool = false
     let onPageChange: (Int) -> Void
     let onSelectionChange: (ReaderSelection?) -> Void
 
@@ -287,16 +337,18 @@ struct PDFReaderRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> PDFView {
         let pdfView = PDFView()
         pdfView.autoScales = true
-        pdfView.displayMode = .singlePage
+        pdfView.displayMode = twoUp ? .twoUp : .singlePage
         pdfView.displayDirection = .horizontal
         pdfView.backgroundColor = .clear
         pdfView.document = PDFDocument(url: documentURL)
         context.coordinator.pageIndex = pageIndex
         context.coordinator.paints = highlights
+        context.coordinator.zoomMemoryKey = zoomMemoryKey
         syncCallbacks(context.coordinator)
         context.coordinator.attach(to: pdfView)
         context.coordinator.applyPage(in: pdfView, index: pageIndex)
         context.coordinator.applyHighlights(on: pdfView)
+        context.coordinator.restoreZoom(in: pdfView)
         DispatchQueue.main.async {
             pdfView.window?.makeFirstResponder(pdfView)
         }
@@ -306,6 +358,10 @@ struct PDFReaderRepresentable: NSViewRepresentable {
     func updateNSView(_ pdfView: PDFView, context: Context) {
         if pdfView.document?.documentURL != documentURL {
             pdfView.document = PDFDocument(url: documentURL)
+        }
+        let mode: PDFDisplayMode = twoUp ? .twoUp : .singlePage
+        if pdfView.displayMode != mode {
+            pdfView.displayMode = mode
         }
         syncCallbacks(context.coordinator)
         if context.coordinator.pageIndex != pageIndex {

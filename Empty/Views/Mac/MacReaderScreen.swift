@@ -84,6 +84,10 @@ struct MacReaderScreen: View {
     @State private var bookmarkedHere = false
     @State private var activityMeter = ReadingActivityMeter()
     @AppStorage("reader.aloud.autonext") private var aloudAutoNext = false
+    @AppStorage("reader.pdf.invert") private var pdfNightInverted = false
+    @AppStorage("reader.pdf.twoup") private var pdfTwoUp = false
+    @AppStorage("reader.traditional") private var traditionalChinese = false
+    @State private var traditionalCache: [Int: (chapter: EPUBChapter, plain: String?)] = [:]
     /// Per-chapter pre-translation activity for the TOC chips.
     @State private var pretransProgress: [Int: MacChapterTransStatus] = [:]
     /// Translated chapter titles for the bilingual TOC (kind `.title`).
@@ -273,13 +277,13 @@ struct MacReaderScreen: View {
                             Group {
                                 if pageTurn == .paged {
                                     MacPagedChapterReaderView(
-                                        chapter: epub.chapters[currentChapterIndex],
+                                        chapter: displayChapter(epub.chapters[currentChapterIndex]),
                                         basePath: epub.basePath,
                                         fontSize: fontSize,
                                         lineSpacing: lineSpacing,
                                         landing: chapterLanding,
                                         resumeUTF16Offset: resumeUTF16Offset,
-                                        chapterPlainText: currentChapterPlainText(),
+                                        chapterPlainText: displayChapterPlainText(),
                                         highlights: chapterHighlights,
                                         inlineMode: inlineNoteKind,
                                         inlineNotes: inlineNotes,
@@ -298,13 +302,13 @@ struct MacReaderScreen: View {
                                     )
                                 } else {
                                     NativeChapterReaderView(
-                                        chapter: epub.chapters[currentChapterIndex],
+                                        chapter: displayChapter(epub.chapters[currentChapterIndex]),
                                         basePath: epub.basePath,
                                         fontSize: fontSize,
                                         lineSpacing: lineSpacing,
                                         landing: chapterLanding,
                                         resumeUTF16Offset: resumeUTF16Offset,
-                                        chapterPlainText: currentChapterPlainText(),
+                                        chapterPlainText: displayChapterPlainText(),
                                         highlights: chapterHighlights,
                                         inlineMode: inlineNoteKind,
                                         inlineLayout: readingMode == .bilingual ? .parallel : .stacked,
@@ -418,6 +422,10 @@ struct MacReaderScreen: View {
             // Shift the 预译 window (current + next two chapters).
             startPretranslation()
         }
+        .onChange(of: traditionalChinese) { _, _ in
+            traditionalCache = [:]
+            inlineNotes = []
+        }
         .onChange(of: readingMode) { _, newMode in
             // The chapter page clears and re-requests notes for the new
             // mode; cached translations rejoin instantly.
@@ -520,6 +528,9 @@ struct MacReaderScreen: View {
                                     documentURL: documentURL,
                                     pageIndex: $currentChapterIndex,
                                     highlights: chapterHighlights,
+                                    nightInverted: pdfNightInverted,
+                                    zoomMemoryKey: "pdf.zoom.\(book.id.uuidString)",
+                                    twoUp: pdfTwoUp,
                                     onPageChange: syncPageProgress,
                                     onSelectionChange: { applySelection($0) }
                                 )
@@ -1661,8 +1672,33 @@ struct MacReaderScreen: View {
         ).first?.text
     }
 
+    // MARK: 繁体显示 (render-layer, EPUB only)
+
+    private func displayChapter(_ chapter: EPUBChapter) -> EPUBChapter {
+        guard traditionalChinese else { return chapter }
+        if let cached = traditionalCache[currentChapterIndex] {
+            return cached.chapter
+        }
+        let converted = EPUBChapter(
+            title: ChineseVariant.traditional(chapter.title),
+            href: chapter.href,
+            content: ChineseVariant.traditional(chapter.content)
+        )
+        let plain = currentChapterPlainText().map(ChineseVariant.traditional)
+        traditionalCache[currentChapterIndex] = (converted, plain)
+        return converted
+    }
+
+    private func displayChapterPlainText() -> String? {
+        guard traditionalChinese else { return currentChapterPlainText() }
+        if let cached = traditionalCache[currentChapterIndex] {
+            return cached.plain
+        }
+        return currentChapterPlainText().map(ChineseVariant.traditional)
+    }
+
     private func updateUTF16Offset(domPrefix: String) {
-        guard let plainText = currentChapterPlainText() else { return }
+        guard let plainText = displayChapterPlainText() else { return }
         let offset = PlainTextSearch.utf16Offset(
             afterNormalizedPrefix: domPrefix,
             in: plainText
