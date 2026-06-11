@@ -340,6 +340,8 @@ struct MacThoughtLinkCard: View {
     var onOpenNotes: () -> Void
     var onSaveLink: () -> Void = {}
     var onAsk: () -> Void
+    /// 不相关 — negative feedback that quiets this pairing.
+    var onDismiss: () -> Void = {}
 
     @Environment(\.emptyPalette) private var palette
 
@@ -349,6 +351,13 @@ struct MacThoughtLinkCard: View {
                 HStack(spacing: 8) {
                     Text("⟲ 思维链接 · 这段与你的一条高亮相连")
                         .font(.system(size: 12, weight: .semibold))
+                    if let theme = link.theme {
+                        Text(theme)
+                            .font(.system(size: 10.5, weight: .bold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 1.5)
+                            .background(palette.accentSoft2, in: Capsule())
+                    }
                     Text(isExpanded ? "⌃" : "⌄")
                 }
                 .foregroundStyle(palette.accent)
@@ -396,6 +405,19 @@ struct MacThoughtLinkCard: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 6)
                             .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+                        Button("不相关", action: onDismiss)
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(palette.ink3)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .overlay(
+                                Capsule().strokeBorder(
+                                    palette.line2,
+                                    style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                                )
+                            )
+                            .help("标记为不相关 — 这一对不再出现，同一条高亮被忽略两次后整体降频")
                     }
                 }
                 .padding(16)

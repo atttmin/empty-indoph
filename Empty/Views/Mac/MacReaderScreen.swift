@@ -13,6 +13,10 @@ enum MacReadingMode: String, CaseIterable {
     case original
     case bilingual
     case companion
+    /// 辩难 lens — counter-questions in the margins, never answers.
+    case debate
+    /// 文献 lens — public-domain commentary echoes.
+    case sources
 }
 
 /// A chapter's pre-translation state in the TOC (✓已缓存 / ⟳预译中 /
@@ -136,6 +140,8 @@ struct MacReaderScreen: View {
         case .original: .none
         case .bilingual: .bilingual
         case .companion: .companion
+        case .debate: .debate
+        case .sources: .sources
         }
     }
 
@@ -465,7 +471,7 @@ struct MacReaderScreen: View {
     private var inlineModeStatusBar: some View {
         HStack(spacing: 8) {
             if inlineAIUnavailable {
-                Text("朱 · AI 暂不可用 — 在侧栏「AI 状态」配置后,\(readingMode == .bilingual ? "双语对照" : "导读")会随阅读逐段出现。")
+                Text("朱 · AI 暂不可用 — 在侧栏「AI 状态」配置后,\(Self.translationKind(for: readingMode) == .bilingual ? "双语对照" : inlineNoteKind.label)会随阅读逐段出现。")
                     .foregroundStyle(palette.accent)
             } else if !inlineInFlight.isEmpty {
                 ProgressView()
@@ -692,8 +698,10 @@ struct MacReaderScreen: View {
             MacSegmentedPills(
                 options: [
                     (.original, "原文"),
-                    (.bilingual, "双语对照"),
+                    (.bilingual, "双语"),
                     (.companion, "导读"),
+                    (.debate, "辩难"),
+                    (.sources, "文献"),
                 ],
                 selection: $readingMode
             )
@@ -863,7 +871,8 @@ struct MacReaderScreen: View {
                     onToggle: { thoughtLinkExpanded.toggle() },
                     onOpenNotes: onOpenNotes,
                     onSaveLink: saveThoughtLinkCard,
-                    onAsk: { askAboutSelection(thoughtLink.explanation) }
+                    onAsk: { askAboutSelection(thoughtLink.explanation) },
+                    onDismiss: { dismissThoughtLink(thoughtLink) }
                 )
             }
 
@@ -892,7 +901,7 @@ struct MacReaderScreen: View {
                     .padding(.horizontal, 24)
                     .padding(.vertical, 10)
             } else if !modeGuideText.isEmpty {
-                ZhupiCallout(title: readingMode == .bilingual ? "双语对照" : "导读") {
+                ZhupiCallout(title: Self.translationKind(for: readingMode) == .bilingual ? "双语对照" : inlineNoteKind.label) {
                     Text(modeGuideText)
                         .font(.system(size: 13.5))
                         .lineSpacing(6)
@@ -993,8 +1002,10 @@ struct MacReaderScreen: View {
             MacSegmentedPills(
                 options: [
                     (.original, "原文"),
-                    (.bilingual, "双语对照"),
+                    (.bilingual, "双语"),
                     (.companion, "导读"),
+                    (.debate, "辩难"),
+                    (.sources, "文献"),
                 ],
                 selection: $readingMode
             )
@@ -1308,7 +1319,25 @@ struct MacReaderScreen: View {
     }
 
     private var translationKind: TranslationKind {
-        readingMode == .companion ? .companion : .bilingual
+        Self.translationKind(for: readingMode)
+    }
+
+    private static func translationKind(for mode: MacReadingMode) -> TranslationKind {
+        switch mode {
+        case .companion: .companion
+        case .debate: .debate
+        case .sources: .sources
+        default: .bilingual
+        }
+    }
+
+    private static func aiNoteKind(for mode: MacReadingMode) -> AIInlineNoteKind {
+        switch mode {
+        case .companion: .companion
+        case .debate: .debate
+        case .sources: .sources
+        default: .bilingual
+        }
     }
 
     /// Called whenever the chapter page reports the paragraphs the reader
@@ -1364,8 +1393,8 @@ struct MacReaderScreen: View {
             }
             return
         }
-        let inlineKind: AIInlineNoteKind = mode == .bilingual ? .bilingual : .companion
-        let kind: TranslationKind = mode == .companion ? .companion : .bilingual
+        let inlineKind = Self.aiNoteKind(for: mode)
+        let kind = Self.translationKind(for: mode)
         for paragraph in paragraphs {
             let key = inlineKey(mode, chapter, paragraph.idx)
             defer { inlineInFlight.remove(key) }
@@ -1584,6 +1613,16 @@ struct MacReaderScreen: View {
         }
     }
 
+    private func dismissThoughtLink(_ link: ThoughtLink) {
+        if let highlightID = link.relatedHighlightID {
+            ThoughtLinkFeedback.dismiss(
+                passage: link.currentText, highlightID: highlightID
+            )
+        }
+        thoughtLink = nil
+        thoughtLinkExpanded = false
+    }
+
     private func detectThoughtLink(for passage: String) async {
         do {
             if var link = try ThoughtLinkFinder(modelContext: modelContext).findLink(
@@ -1591,9 +1630,10 @@ struct MacReaderScreen: View {
                 book: book,
                 chapterIndex: currentChapterIndex
             ) {
-                if let explained = try? await ThoughtLinkFinder(modelContext: modelContext)
-                    .explainLink(link) {
-                    link.explanation = explained
+                if let insight = try? await ThoughtLinkFinder(modelContext: modelContext)
+                    .linkInsight(link) {
+                    link.theme = insight.theme
+                    link.explanation = insight.why
                 }
                 thoughtLink = link
                 thoughtLinkSaved = false

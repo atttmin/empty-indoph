@@ -286,7 +286,7 @@ private struct PageComposer {
         func appendNote(for paragraph: ReaderParagraph) {
             guard inlineMode != .none else { return }
             let note = inlineNotes.first(where: { $0.idx == paragraph.idx })
-            let label = inlineMode == .bilingual ? "译" : "导读"
+            let label = inlineMode.label
 
             // Untranslated paragraphs show a quiet pending/failed line
             // instead of silently nothing — the retry pipeline fills it

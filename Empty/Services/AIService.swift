@@ -42,6 +42,10 @@ nonisolated struct GroundedPassage: Identifiable, Sendable {
 nonisolated enum AIInlineNoteKind: Sendable {
     case bilingual
     case companion
+    /// 辩难 lens: Socratic counter-questions only — never answers.
+    case debate
+    /// 文献 lens: public-domain commentary and parallel passages only.
+    case sources
 }
 
 nonisolated enum AIInlineNotePrompt {
@@ -51,10 +55,14 @@ nonisolated enum AIInlineNotePrompt {
             "Translate this paragraph into natural, literary Simplified Chinese."
         case .companion:
             "Retell this paragraph in clear modern Simplified Chinese. Preserve the key imagery and tone. Use no more than three sentences."
+        case .debate:
+            "You are a Socratic sparring partner (辩难). Pose one or two sharp counter-questions in Simplified Chinese that challenge this paragraph's claim or assumption. Ask only — never answer them, never explain, never take a side."
+        case .sources:
+            "You are a classical-commentary companion (文献). In Simplified Chinese, cite at most two RELEVANT passages from public-domain works (classics, traditional commentaries, pre-1928 texts) that echo or illuminate this paragraph. Format each as 「书名」：引文 — never invent sources; if nothing genuinely fits, output exactly 暂无可靠文献参照。"
         }
         return """
         \(instruction)
-        Output only the generated Chinese text. Do not include JSON, citations, labels, bullets, or commentary.
+        Output only the generated Chinese text. Do not include JSON, labels, bullets, or commentary about your task.
 
         Text:
         \(text)

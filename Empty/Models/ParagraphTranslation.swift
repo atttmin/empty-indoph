@@ -61,4 +61,8 @@ nonisolated enum TranslationKind: String, CaseIterable, Sendable {
     case companion = "comp"
     /// Chapter-title translation for the bilingual TOC.
     case title
+    /// 辩难 lens counter-questions.
+    case debate = "q"
+    /// 文献 lens public-domain echoes.
+    case sources = "src"
 }

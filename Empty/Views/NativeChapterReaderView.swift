@@ -436,7 +436,7 @@ struct NativeChapterReaderView: View {
     @ViewBuilder
     private func inlineNoteView(for index: Int) -> some View {
         let note = inlineNotesByIndex[index]
-        let title = inlineMode == .bilingual ? "译" : "导读"
+        let title = inlineMode.label
         let body = note?.failed == true
             ? "暂不可用，稍后会自动重试。"
             : (note?.text.isEmpty == false ? note?.text ?? "" : "生成中…")

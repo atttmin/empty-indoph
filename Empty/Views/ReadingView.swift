@@ -41,6 +41,19 @@ nonisolated enum InlineNoteKind: String {
     case none
     case bilingual = "bi"
     case companion = "comp"
+    case debate = "q"
+    case sources = "src"
+
+    /// The in-flow note's small caps label.
+    var label: String {
+        switch self {
+        case .none: ""
+        case .bilingual: "译"
+        case .companion: "导读"
+        case .debate: "辩难"
+        case .sources: "文献"
+        }
+    }
 }
 
 /// iOS reader text mode — the 原文 / 双语对照 / 导读 cycle behind the
@@ -49,12 +62,16 @@ nonisolated enum IOSReadingMode: String, CaseIterable {
     case original
     case bilingual
     case companion
+    case debate
+    case sources
 
     var badge: String {
         switch self {
         case .original: "原"
         case .bilingual: "译"
         case .companion: "导"
+        case .debate: "辩"
+        case .sources: "献"
         }
     }
 
@@ -63,6 +80,8 @@ nonisolated enum IOSReadingMode: String, CaseIterable {
         case .original: "原文"
         case .bilingual: "双语对照"
         case .companion: "导读"
+        case .debate: "辩难"
+        case .sources: "文献"
         }
     }
 }
@@ -805,6 +824,13 @@ struct ReadingView: View {
                 HStack(spacing: 7) {
                     Text("⟲ 思维链接 · 与你的一条高亮相连")
                         .font(.system(size: 11.5, weight: .semibold))
+                    if let theme = link.theme {
+                        Text(theme)
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1.5)
+                            .background(palette.accentSoft2, in: Capsule())
+                    }
                     Text(thoughtLinkExpanded ? "⌃" : "⌄")
                 }
                 .foregroundStyle(palette.accent)
@@ -849,6 +875,28 @@ struct ReadingView: View {
                         .padding(.vertical, 6)
                         .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
                         .disabled(thoughtLinkSaved)
+
+                        Button("不相关") {
+                            if let highlightID = link.relatedHighlightID {
+                                ThoughtLinkFeedback.dismiss(
+                                    passage: link.currentText,
+                                    highlightID: highlightID
+                                )
+                            }
+                            thoughtLink = nil
+                            thoughtLinkExpanded = false
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(palette.ink3)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .overlay(
+                            Capsule().strokeBorder(
+                                palette.line2,
+                                style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                            )
+                        )
                     }
                 }
                 .padding(14)
@@ -988,9 +1036,10 @@ struct ReadingView: View {
                 book: book,
                 chapterIndex: currentChapterIndex
             ) {
-                if let explained = try? await ThoughtLinkFinder(modelContext: modelContext)
-                    .explainLink(link) {
-                    link.explanation = explained
+                if let insight = try? await ThoughtLinkFinder(modelContext: modelContext)
+                    .linkInsight(link) {
+                    link.theme = insight.theme
+                    link.explanation = insight.why
                 }
                 thoughtLink = link
                 thoughtLinkExpanded = false
@@ -1062,15 +1111,27 @@ struct ReadingView: View {
         case .original: .none
         case .bilingual: .bilingual
         case .companion: .companion
+        case .debate: .debate
+        case .sources: .sources
         }
     }
 
     private static func translationKind(for mode: IOSReadingMode) -> TranslationKind {
-        mode == .companion ? .companion : .bilingual
+        switch mode {
+        case .companion: .companion
+        case .debate: .debate
+        case .sources: .sources
+        default: .bilingual
+        }
     }
 
     private static func aiNoteKind(for mode: IOSReadingMode) -> AIInlineNoteKind {
-        mode == .companion ? .companion : .bilingual
+        switch mode {
+        case .companion: .companion
+        case .debate: .debate
+        case .sources: .sources
+        default: .bilingual
+        }
     }
 
     /// Translates the visible paragraphs the chapter page reports, in
