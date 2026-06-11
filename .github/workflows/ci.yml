@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  macos-test:
+    name: Build and Test (macOS)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build and run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Empty.xcodeproj \
+            -scheme Empty \
+            -destination 'platform=macOS' \
+            -only-testing:EmptyTests \
+            -skip-testing:EmptyUITests \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty

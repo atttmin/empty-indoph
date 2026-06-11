@@ -96,8 +96,9 @@ final class SemanticScorerTests: XCTestCase {
             limit: 2
         )
 
-        XCTAssertEqual(results.count, 2)
+        // Chunks with zero lexical overlap are excluded; only the matching
+        // passage should surface when no embeddings are present.
+        XCTAssertEqual(results.count, 1)
         XCTAssertEqual(results[0].text, "jumps over the lazy dog")
-        XCTAssertEqual(results[1].text, "The quick brown fox")
     }
 }

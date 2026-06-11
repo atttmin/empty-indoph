@@ -4,7 +4,9 @@
 //
 
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 
 /// On-device `AIService` backed by Apple's Foundation Models framework.
 ///
@@ -18,6 +20,7 @@ import FoundationModels
 ///
 /// Free, offline, private: the right default route. Deep-reasoning features
 /// route to a cloud provider later through the same `AIService` protocol.
+#if canImport(FoundationModels)
 final class FoundationModelsAIService: AIService {
     /// Token budget for prompt input. The model's context window is ~4096
     /// tokens shared by instructions, input, and output; this leaves
@@ -251,3 +254,33 @@ private enum Prompts {
         """
     }
 }
+#else
+/// Stub for CI and SDKs without the Foundation Models framework (e.g. GitHub
+/// Actions runners on older Xcode). Routes through `resolveUsableService()`
+/// fall back to cloud when configured.
+final class FoundationModelsAIService: AIService {
+    var availability: AIAvailability {
+        .unavailable(
+            reason: "On-device Apple Intelligence requires a newer SDK with the Foundation Models framework."
+        )
+    }
+
+    func summarize(_ text: String, focus: SummaryFocus) async throws -> String {
+        try ensureAvailable()
+        return ""
+    }
+
+    func answer(
+        question: String,
+        groundedIn passages: [GroundedPassage]
+    ) async throws -> GroundedAnswer {
+        try ensureAvailable()
+        return GroundedAnswer(text: "", citedPassageIDs: [])
+    }
+
+    func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] {
+        try ensureAvailable()
+        return []
+    }
+}
+#endif
