@@ -1411,12 +1411,31 @@ extension ChapterWebView {
                 overflow-wrap: break-word;
                 -webkit-text-size-adjust: none;
             }
-            img {
+            /* Images in a CSS-columns pager: keep each one inside a single
+               column (a replaced element that fragments across a column
+               boundary paints blank in WebKit), cap height so it never
+               needs to fragment, and promote to its own layer so it still
+               paints when scrolled into a far column. Covers <svg>/<image>
+               and <figure>/<picture> wrappers too. */
+            img, svg, image, figure, picture {
                 max-width: 100%;
-                max-height: calc(100vh - 80px);
+                max-height: calc(100vh - 120px);
                 height: auto;
+                break-inside: avoid;
+                -webkit-column-break-inside: avoid;
+                page-break-inside: avoid;
+            }
+            img, svg {
                 display: block;
                 margin: 16px auto;
+                transform: translateZ(0);
+            }
+            figure, picture { display: block; margin: 16px auto; text-align: center; }
+            /* An image alone in a paragraph shouldn't be split from itself. */
+            p:has(> img:only-child),
+            p:has(> a:only-child > img:only-child) {
+                break-inside: avoid;
+                -webkit-column-break-inside: avoid;
             }
             h1, h2, h3, h4, h5, h6 {
                 line-height: 1.3;
@@ -1928,7 +1947,32 @@ extension ChapterWebView {
         }, { passive: true });
         // Window resizes reflow the columns; stay on the kept page.
         window.addEventListener('resize', function () { readerGoTo(pageIndex, false); });
+        // Images decode lazily and lay out late: a still-decoding image in
+        // an off-screen column can paint blank, and a late layout shift can
+        // desync paging. Force eager synchronous decode, then re-fit the
+        // kept page once each image (and the whole set) settles.
+        function prepareImages() {
+            const imgs = Array.prototype.slice.call(document.images || []);
+            let settleTimer = null;
+            const reflow = function () {
+                clearTimeout(settleTimer);
+                settleTimer = setTimeout(function () {
+                    readerGoTo(pageIndex, false);
+                }, 80);
+            };
+            imgs.forEach(function (img) {
+                img.setAttribute('decoding', 'sync');
+                img.setAttribute('loading', 'eager');
+                if (img.complete && img.naturalWidth > 0) { return; }
+                img.addEventListener('load', reflow, { once: true });
+                img.addEventListener('error', reflow, { once: true });
+                if (typeof img.decode === 'function') {
+                    img.decode().then(reflow).catch(function () {});
+                }
+            });
+        }
         window.addEventListener('load', function () {
+            prepareImages();
             requestAnimationFrame(function () { reportPosition(); });
         });
         // Tap zones: left quarter = previous page, right quarter = next,
