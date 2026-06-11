@@ -250,6 +250,17 @@ struct MacCompanionPanel: View {
                     model.draft = "这段的核心主张是什么?"
                     send()
                 }
+                Button("提炼本轮主题") {
+                    model.proposeTheme(for: book)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(model.canProposeTheme ? palette.accent : palette.ink3)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(palette.card, in: Capsule())
+                .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+                .disabled(!model.canProposeTheme)
             }
             HStack(spacing: 8) {
                 TextField("就这一页,问点什么…", text: $model.draft)

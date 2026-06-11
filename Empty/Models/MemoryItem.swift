@@ -71,6 +71,9 @@ final class MemoryItem {
         set { tagsRawValue = newValue.joined(separator: ",") }
     }
 
+    static let compressedCompanionQATag = "qa-compressed"
+    static let qaCompressionSourceKind = "qaCompression"
+
     init(
         kind: MemoryKind,
         title: String,
@@ -93,5 +96,9 @@ final class MemoryItem {
         self.sourceRefID = sourceRefID
         self.sourceRefKind = sourceRefKind
         self.isUserConfirmed = isUserConfirmed
+    }
+
+    var isCompressedCompanionQA: Bool {
+        kind == .companionQA && tags.contains(Self.compressedCompanionQATag)
     }
 }

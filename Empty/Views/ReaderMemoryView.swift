@@ -17,6 +17,7 @@ struct ReaderMemoryView: View {
     @Environment(\.modelContext) private var modelContext
 
     @AppStorage(ReaderMemory.enabledKey) private var memoryEnabled = true
+    @State private var compressionMessage: String?
     @Query(sort: \MemoryItem.updatedAt, order: .reverse) private var items: [MemoryItem]
 
     var body: some View {
@@ -42,7 +43,9 @@ struct ReaderMemoryView: View {
                 .padding(13)
                 .emptyCard(palette, radius: 12)
 
-                if items.isEmpty {
+                compressionPanel
+
+                if visibleItems.isEmpty {
                     Text("还没有记忆条目 — 给高亮写批注、保存问答卡或链接卡，或在伴读里确认「记住」，都会成为记忆。")
                         .font(.system(size: 11.5))
                         .foregroundStyle(palette.ink3)
@@ -52,7 +55,7 @@ struct ReaderMemoryView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 6) {
-                            ForEach(items) { item in
+                            ForEach(visibleItems) { item in
                                 memoryRow(item)
                             }
                         }
@@ -75,6 +78,7 @@ struct ReaderMemoryView: View {
         #endif
         .task {
             try? ReaderMemory(modelContext: modelContext).syncFromReaderData()
+            compressionMessage = nil
         }
     }
 
@@ -84,7 +88,7 @@ struct ReaderMemoryView: View {
                 Text("⚲ 读者记忆")
                     .font(.system(size: 17, weight: .black, design: .serif))
                     .foregroundStyle(palette.ink)
-                Text("\(items.count) 条 · 越读越懂你")
+                Text("\(visibleItems.count) 条 · 越读越懂你")
                     .font(.system(size: 11))
                     .foregroundStyle(palette.ink3)
             }
@@ -101,6 +105,64 @@ struct ReaderMemoryView: View {
             .buttonStyle(.plain)
         }
         .padding(EdgeInsets(top: 16, leading: 18, bottom: 12, trailing: 14))
+    }
+
+
+    private var visibleItems: [MemoryItem] {
+        items.filter { !$0.isCompressedCompanionQA }
+    }
+
+    private var compressibleQACount: Int {
+        items.filter {
+            $0.kind == .companionQA && $0.isUserConfirmed && !$0.isCompressedCompanionQA
+        }.count
+    }
+
+    private var compressionPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("旧问答压缩")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(palette.ink)
+                    Text("把反复追问的问答卡合并成长期主题，旧问答会从记忆召回里退场。")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(palette.ink3)
+                }
+                Spacer()
+                Button("压缩旧问答") {
+                    compressOldQA()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(compressibleQACount >= 2 ? palette.accent : palette.ink3)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    (compressibleQACount >= 2 ? palette.accentSoft : palette.side),
+                    in: Capsule()
+                )
+                .disabled(compressibleQACount < 2)
+            }
+            if let compressionMessage {
+                Text(compressionMessage)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(palette.ink3)
+            }
+        }
+        .padding(13)
+        .emptyCard(palette, radius: 12)
+    }
+
+    private func compressOldQA() {
+        do {
+            let result = try ReaderMemory(modelContext: modelContext).compressCompanionQAIntoThemes()
+            compressionMessage = result.themesCreated > 0
+                ? "已把 \(result.questionsCompressed) 条旧问答压成 \(result.themesCreated) 个主题。"
+                : "旧问答还不够集中，暂时压不成主题。"
+        } catch {
+            compressionMessage = "压缩失败：\(error.localizedDescription)"
+        }
     }
 
     private func memoryRow(_ item: MemoryItem) -> some View {

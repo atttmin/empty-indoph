@@ -901,7 +901,7 @@ struct MacReaderScreen: View {
     private var modeGuideBanner: some View {
         Group {
             if isGuideLoading {
-                ProgressView(readingMode == .bilingual ? "生成双语对照…" : "生成导读…")
+                ProgressView(readingMode == .bilingual ? "生成双语对照…" : "生成\(inlineNoteKind.label)…")
                     .padding(.horizontal, 24)
                     .padding(.vertical, 10)
             } else if !modeGuideText.isEmpty {
@@ -1466,13 +1466,13 @@ struct MacReaderScreen: View {
 
     // MARK: 预译 (pre-translation, never blocking)
 
-    /// Pre-translates the current and next two chapters (plus chapter
-    /// titles for the bilingual TOC) into the persistent cache while the
-    /// reader is in 双语对照 — the prototype's 「预译 + 永不阻塞」.
+    /// Pre-caches the current and next two chapters for the active inline
+    /// lens. 双语 still gets the durable TOC/title path; 导读 / 辩难 / 文献
+    /// only warm paragraph caches.
     private func startPretranslation() {
         pretransTask?.cancel()
         pretransProgress = [:]
-        guard readingMode == .bilingual, epubBook != nil else { return }
+        guard readingMode != .original, epubBook != nil else { return }
         let chapter = currentChapterIndex
         pretransTask = Task { await pretranslate(from: chapter) }
     }
@@ -1484,6 +1484,9 @@ struct MacReaderScreen: View {
         // model runs locally — reading janks. On-device stays
         // per-viewport; only cloud providers cache ahead.
         guard !resolution.provider.isLocal else { return }
+        let mode = readingMode
+        let kind = Self.translationKind(for: mode)
+        let noteKind = Self.aiNoteKind(for: mode)
         let store = TranslationStore(modelContext: modelContext)
         let bookID = book.id
         let language = LanguageSettings.effective(for: bookID)
@@ -1494,65 +1497,66 @@ struct MacReaderScreen: View {
             )
         )) ?? []
 
-        // Chapter titles first — they make the TOC bilingual and cost
-        // almost nothing.
-        for chapter in chapters.prefix(50) {
-            guard !Task.isCancelled, readingMode == .bilingual else { return }
-            guard let title = chapter.title,
-                  !title.isEmpty,
-                  tocTitleTranslations[chapter.index] == nil else { continue }
-            if let cached = store.lookup(
-                bookID: bookID, kind: .title, text: title, target: language.target
-            ) {
-                tocTitleTranslations[chapter.index] = cached
-                continue
+        if kind == .bilingual {
+            // Chapter titles first — they make the TOC bilingual and cost
+            // almost nothing.
+            for chapter in chapters.prefix(50) {
+                guard !Task.isCancelled, readingMode == mode else { return }
+                guard let title = chapter.title,
+                      !title.isEmpty,
+                      tocTitleTranslations[chapter.index] == nil else { continue }
+                if let cached = store.lookup(
+                    bookID: bookID, kind: .title, text: title, target: language.target
+                ) {
+                    tocTitleTranslations[chapter.index] = cached
+                    continue
+                }
+                guard let note = try? await resolution.service.inlineNote(
+                    for: title,
+                    kind: .bilingual,
+                    targetLanguage: language.target
+                ) else { continue }
+                let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { continue }
+                store.store(
+                    text,
+                    bookID: bookID,
+                    chapterIndex: chapter.index,
+                    kind: .title,
+                    text: title,
+                    target: language.target
+                )
+                tocTitleTranslations[chapter.index] = text
             }
-            // Plain-text path — the grounded JSON Q&A path occasionally
-            // mis-formats and would surface as a missing translation.
-            guard let note = try? await resolution.service.inlineNote(
-                for: title,
-                kind: .bilingual,
-                targetLanguage: language.target
-            ) else { continue }
-            let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { continue }
-            store.store(
-                text,
-                bookID: bookID,
-                chapterIndex: chapter.index,
-                kind: .title,
-                text: title,
-                target: language.target
-            )
-            tocTitleTranslations[chapter.index] = text
         }
 
         // Then paragraphs of the reading window.
         let window = chapters.filter {
             $0.index >= startChapter && $0.index < startChapter + 3
         }
-        for chapter in window where chapter.pretranslatedAt == nil {
-            pretransProgress[chapter.index] = .queued
+        if kind == .bilingual {
+            for chapter in window where chapter.pretranslatedAt == nil {
+                pretransProgress[chapter.index] = .queued
+            }
         }
         for chapter in window {
-            guard !Task.isCancelled, readingMode == .bilingual else { return }
+            guard !Task.isCancelled, readingMode == mode else { return }
             // Even chapters stamped pretranslated can carry holes (a
             // provider hiccup skipped paragraphs in an earlier pass) —
             // the cheap local lookups below re-check and backfill them.
             let paragraphs = TranslationStore.paragraphs(in: chapter.text)
             let missing = paragraphs.filter { paragraph in
-                // 同语言跳过: target-language paragraphs need no 译文 and
-                // must not count as holes (or backfill would loop forever).
-                if LanguageDetect.matchesTarget(
+                if kind == .bilingual,
+                   LanguageDetect.matchesTarget(
                     textLanguage: LanguageDetect.sourceLanguage(of: paragraph, settings: language),
                     target: language.target
-                ) { return false }
+                   ) { return false }
                 return store.lookup(
-                    bookID: bookID, kind: .bilingual, text: paragraph, target: language.target
+                    bookID: bookID, kind: kind, text: paragraph, target: language.target
                 ) == nil
             }
             guard !missing.isEmpty else {
-                if chapter.pretranslatedAt == nil {
+                if kind == .bilingual, chapter.pretranslatedAt == nil {
                     chapter.pretranslatedAt = Date()
                     try? modelContext.save()
                 }
@@ -1560,30 +1564,41 @@ struct MacReaderScreen: View {
                 continue
             }
             var done = paragraphs.count - missing.count
-            pretransProgress[chapter.index] = .translating(done: done, total: paragraphs.count)
-            for paragraph in missing {
-                guard !Task.isCancelled, readingMode == .bilingual else { return }
-                if let text = try? await resolution.service.inlineNote(
-                    for: paragraph,
-                    kind: .bilingual,
-                    targetLanguage: language.target
-                    ).trimmingCharacters(in: .whitespacesAndNewlines),
-                    InlineNoteQuality.isWorthShowing(note: text, original: paragraph) {
-                    store.store(
-                        text,
-                        bookID: bookID,
-                        chapterIndex: chapter.index,
-                        kind: .bilingual,
-                        text: paragraph,
-                        target: language.target
-                    )
-                }
-                done += 1
+            if kind == .bilingual {
                 pretransProgress[chapter.index] = .translating(done: done, total: paragraphs.count)
             }
-            chapter.pretranslatedAt = Date()
-            try? modelContext.save()
-            pretransProgress[chapter.index] = nil
+            for paragraph in missing {
+                guard !Task.isCancelled, readingMode == mode else { return }
+                if let note = try? await resolution.service.inlineNote(
+                    for: paragraph,
+                    kind: noteKind,
+                    targetLanguage: language.target
+                ) {
+                    let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let shouldStore = kind == .bilingual
+                        ? InlineNoteQuality.isWorthShowing(note: text, original: paragraph)
+                        : !text.isEmpty
+                    if shouldStore {
+                        store.store(
+                            text,
+                            bookID: bookID,
+                            chapterIndex: chapter.index,
+                            kind: kind,
+                            text: paragraph,
+                            target: language.target
+                        )
+                    }
+                }
+                done += 1
+                if kind == .bilingual {
+                    pretransProgress[chapter.index] = .translating(done: done, total: paragraphs.count)
+                }
+            }
+            if kind == .bilingual {
+                chapter.pretranslatedAt = Date()
+                try? modelContext.save()
+                pretransProgress[chapter.index] = nil
+            }
             cacheStatsTick += 1
         }
     }
@@ -1632,19 +1647,15 @@ struct MacReaderScreen: View {
         do {
             let resolution = AIProviderRegistry.load().resolveUsableService(feature: .recap)
             let clipped = String(text.prefix(4_000))
-            if readingMode == .bilingual {
-                modeGuideText = try await AITransientRetry.run {
-                    try await resolution.service.inlineNote(
-                        for: clipped,
-                        kind: .bilingual,
-                        targetLanguage: LanguageSettings.effective(for: book.id).target
-                    )
-                }
-            } else {
-                modeGuideText = try await resolution.service.summarize(clipped, focus: .recap)
+            modeGuideText = try await AITransientRetry.run {
+                try await resolution.service.inlineNote(
+                    for: clipped,
+                    kind: Self.aiNoteKind(for: readingMode),
+                    targetLanguage: LanguageSettings.effective(for: book.id).target
+                )
             }
         } catch {
-            modeGuideText = "导读暂不可用 — \(error.localizedDescription)"
+            modeGuideText = "\(inlineNoteKind.label)暂不可用 — \(error.localizedDescription)"
         }
     }
 

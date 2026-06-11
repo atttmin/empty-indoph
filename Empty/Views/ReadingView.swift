@@ -1265,14 +1265,12 @@ struct ReadingView: View {
         }
     }
 
-    /// Background pre-translation (双语对照 only, like the Mac reader):
-    /// fills the persistent cache for the current and next two chapters
-    /// so paging forward never waits on the model. 导读 stays
-    /// per-viewport — paraphrasing a whole book ahead of the reader
-    /// would burn tokens on chapters that may never be read that way.
+    /// Background pre-caching for the active inline lens. 双语 still skips
+    /// same-language paragraphs; 导读 / 辩难 / 文献 cache ahead too so
+    /// paging forward stays instant on cloud providers.
     private func startPretranslation() {
         pretransTask?.cancel()
-        guard readingMode == .bilingual, book.format == .epub else { return }
+        guard readingMode != .original, book.format == .epub else { return }
         let chapter = currentChapterIndex
         pretransTask = Task { await pretranslate(from: chapter) }
     }
@@ -1284,9 +1282,11 @@ struct ReadingView: View {
         // model runs locally — reading janks and the battery drains.
         // On-device stays per-viewport; only cloud providers cache ahead.
         guard !resolution.provider.isLocal else { return }
+        let mode = readingMode
+        let kind = Self.translationKind(for: mode)
+        let noteKind = Self.aiNoteKind(for: mode)
         let store = TranslationStore(modelContext: modelContext)
         let bookID = book.id
-        let language = LanguageSettings.effective(for: bookID)
         let chapters = (try? modelContext.fetch(
             FetchDescriptor<Chapter>(
                 predicate: #Predicate { $0.bookID == bookID },
@@ -1298,48 +1298,53 @@ struct ReadingView: View {
             $0.index >= startChapter && $0.index < startChapter + 3
         }
         for chapter in window {
-            guard !Task.isCancelled, readingMode == .bilingual else { return }
+            guard !Task.isCancelled, readingMode == mode else { return }
             // Even chapters stamped pretranslated can carry holes (a
             // provider hiccup skipped paragraphs in an earlier pass) —
             // the cheap local lookups below re-check and backfill them.
             let paragraphs = TranslationStore.paragraphs(in: chapter.text)
             let missing = paragraphs.filter { paragraph in
-                // 同语言跳过: target-language paragraphs need no 译文 and
-                // must not count as holes (or backfill would loop forever).
-                if LanguageDetect.matchesTarget(
+                if kind == .bilingual,
+                   LanguageDetect.matchesTarget(
                     textLanguage: LanguageDetect.sourceLanguage(of: paragraph, settings: language),
                     target: language.target
                 ) { return false }
                 return store.lookup(
-                    bookID: bookID, kind: .bilingual, text: paragraph, target: language.target
+                    bookID: bookID, kind: kind, text: paragraph, target: language.target
                 ) == nil
             }
             guard !missing.isEmpty else {
-                if chapter.pretranslatedAt == nil {
+                if kind == .bilingual, chapter.pretranslatedAt == nil {
                     chapter.pretranslatedAt = Date()
                     try? modelContext.save()
                 }
                 continue
             }
             for paragraph in missing {
-                guard !Task.isCancelled, readingMode == .bilingual else { return }
-                guard let text = try? await resolution.service.inlineNote(
+                guard !Task.isCancelled, readingMode == mode else { return }
+                guard let note = try? await resolution.service.inlineNote(
                     for: paragraph,
-                    kind: .bilingual,
+                    kind: noteKind,
                     targetLanguage: language.target
-                    ).trimmingCharacters(in: .whitespacesAndNewlines),
-                    InlineNoteQuality.isWorthShowing(note: text, original: paragraph)
+                    ).trimmingCharacters(in: .whitespacesAndNewlines)
                 else { continue }
+                let shouldStore = kind == .bilingual
+                    ? InlineNoteQuality.isWorthShowing(note: note, original: paragraph)
+                    : !note.isEmpty
+                guard shouldStore else { continue }
                 store.store(
-                    text,
+                    note,
                     bookID: bookID,
                     chapterIndex: chapter.index,
-                    kind: .bilingual,
+                    kind: kind,
                     text: paragraph,
                     target: language.target
                 )
             }
-            chapter.pretranslatedAt = Date()
+            if kind == .bilingual {
+                chapter.pretranslatedAt = Date()
+                try? modelContext.save()
+            }
             try? modelContext.save()
         }
     }

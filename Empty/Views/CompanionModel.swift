@@ -43,6 +43,14 @@ final class CompanionModel {
     ]
     var thinking = false
     var draft = ""
+    private var lastThemeProposalSignature: String?
+
+
+    var canProposeTheme: Bool {
+        guard !thinking,
+              let signature = Self.themeProposalSignature(from: messages) else { return false }
+        return signature != lastThemeProposalSignature
+    }
 
     func send(
         book: Book,
@@ -133,6 +141,54 @@ final class CompanionModel {
         }
     }
 
+    func proposeTheme(for book: Book) {
+        guard canProposeTheme else { return }
+        thinking = true
+        let signature = Self.themeProposalSignature(from: messages)
+
+        Task {
+            defer { thinking = false }
+            do {
+                let resolution = AIProviderRegistry.load().resolveUsableService(feature: .chat)
+                let targetLanguage = LanguageSettings.promptName(
+                    for: LanguageSettings.effective(for: book.id).resolvedChatTarget()
+                )
+                guard let draft = try await Self.makeThemeDraft(
+                    from: messages,
+                    targetLanguage: targetLanguage,
+                    service: resolution.service
+                ) else {
+                    messages.append(Message(
+                        role: .ai,
+                        text: "至少要有两轮有效追问,我才能替你提炼一个长期主题。"
+                    ))
+                    return
+                }
+                lastThemeProposalSignature = signature
+                messages.append(Message(
+                    role: .ai,
+                    text: draft.body,
+                    steps: ["聚合本轮问答", "提炼主题(待确认)"],
+                    actions: [
+                        CompanionAction(
+                            title: "记住主题「\(draft.title)」",
+                            kind: .saveMemory(
+                                title: draft.title,
+                                body: draft.body,
+                                tags: draft.tags
+                            )
+                        )
+                    ]
+                ))
+            } catch {
+                messages.append(Message(
+                    role: .ai,
+                    text: "这轮主题还没提炼出来:\(error.localizedDescription)"
+                ))
+            }
+        }
+    }
+
     static func hasReadableContext(
         bookID: UUID,
         position: ReadingPosition,
@@ -145,6 +201,79 @@ final class CompanionModel {
         )
         return !readText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    static func themeProposalSignature(
+        from messages: [Message],
+        limit: Int = 4
+    ) -> String? {
+        let ids = themePassages(from: messages, limit: limit).map(\.id.description)
+        guard ids.count >= 2 else { return nil }
+        return ids.joined(separator: "|")
+    }
+
+    static func themePassages(
+        from messages: [Message],
+        limit: Int = 4
+    ) -> [GroundedPassage] {
+        messages
+            .filter { $0.role == .ai && $0.question != nil }
+            .suffix(limit)
+            .enumerated()
+            .map { index, message in
+                GroundedPassage(
+                    id: index,
+                    text: "Q: \(message.question ?? "")\nA: \(message.text)"
+                )
+            }
+    }
+
+    static func makeThemeDraft(
+        from messages: [Message],
+        targetLanguage: String,
+        service: any AIService
+    ) async throws -> (title: String, body: String, tags: [String])? {
+        let passages = themePassages(from: messages)
+        guard passages.count >= 2 else { return nil }
+        let answer = try await service.answer(
+            question: """
+            Synthesize one durable reader-memory theme from these companion Q&A turns.
+            Respond in \(targetLanguage) using exactly three lines:
+            Title: <2-8 words or 2-10 characters>
+            Summary: <1-2 sentences on the recurring concern or obsession>
+            Tags: <up to 3 short tags, comma-separated; write none if empty>
+            """,
+            groundedIn: passages
+        )
+        return parseThemeDraft(answer.text)
+    }
+
+    static func parseThemeDraft(_ text: String) -> (title: String, body: String, tags: [String]) {
+        var title: String?
+        var body: String?
+        var tags: [String] = []
+
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("Title:") {
+                title = String(line.dropFirst("Title:".count)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Summary:") {
+                body = String(line.dropFirst("Summary:".count)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Tags:") {
+                let rawTags = String(line.dropFirst("Tags:".count)).trimmingCharacters(in: .whitespaces)
+                if rawTags.lowercased() != "none" {
+                    tags = rawTags
+                        .split(whereSeparator: { [",", "，", "、"].contains($0) })
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                }
+            }
+        }
+
+        let resolvedTitle = title?.isEmpty == false ? title! : "本轮反复追问的主题"
+        let resolvedBody = body?.isEmpty == false ? body! : text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (resolvedTitle, resolvedBody, Array(tags.prefix(3)))
+    }
+
 
     /// The pre-agent pipeline: spoiler-safe retrieval + one grounded answer.
     /// `answerLanguage` rides only on the model question — the retrieval

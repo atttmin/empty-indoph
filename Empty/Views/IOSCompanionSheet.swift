@@ -224,6 +224,19 @@ struct IOSCompanionSheet: View {
             HStack(spacing: 6) {
                 suggestionChip("帮我回顾一下读到哪了")
                 suggestionChip("这一章的核心主张是什么?")
+                if let book {
+                    Button("提炼本轮主题") {
+                        model.proposeTheme(for: book)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(model.canProposeTheme ? palette.accent : palette.ink3)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .background(palette.card, in: Capsule())
+                    .overlay(Capsule().strokeBorder(palette.line2, lineWidth: 1))
+                    .disabled(!model.canProposeTheme)
+                }
             }
             HStack(spacing: 8) {
                 TextField("就这一页,问点什么…", text: $model.draft)

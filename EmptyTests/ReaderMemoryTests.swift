@@ -166,7 +166,56 @@ struct ReaderMemoryTests {
         }
 
         _ = container
+
     }
+
+    @Test func compressesOldQaIntoThemeAndSkipsQaRecall() throws {
+        let (container, book) = try makeFixture()
+        let context = container.mainContext
+
+        let qa1 = StudyCardEntry(
+            question: "减法如何帮助专注？",
+            answer: "减掉干扰，核心更清楚。",
+            source: "Walden · 第 1 章",
+            kind: .qa
+        )
+        qa1.book = book
+        let qa2 = StudyCardEntry(
+            question: "为什么减法能看清重点？",
+            answer: "因为先移走噪音，只留下本质。",
+            source: "Walden · 第 1 章",
+            kind: .qa
+        )
+        qa2.book = book
+        context.insert(qa1)
+        context.insert(qa2)
+        try context.save()
+
+        let memory = ReaderMemory(modelContext: context)
+        try memory.syncFromReaderData()
+        let result = try memory.compressCompanionQAIntoThemes()
+
+        #expect(result.themesCreated == 1)
+        #expect(result.questionsCompressed == 2)
+
+        let items = try context.fetch(FetchDescriptor<MemoryItem>())
+        let qaItems = items.filter { $0.kind == .companionQA }
+        let themeItems = items.filter {
+            $0.kind == .theme && $0.sourceRefKind == MemoryItem.qaCompressionSourceKind
+        }
+        #expect(qaItems.count == 2)
+        #expect(qaItems.allSatisfy { $0.isCompressedCompanionQA })
+        #expect(themeItems.count == 1)
+        #expect(!themeItems[0].title.isEmpty)
+
+        let qaHits = try memory.recall(query: "减法 重点", kinds: [.companionQA])
+        let themeHits = try memory.recall(query: "减法 重点", kinds: [.theme])
+        #expect(qaHits.isEmpty)
+        #expect(themeHits.count == 1)
+
+        _ = container
+    }
+
 
     @Test func recallUsesPersistedMemoryEmbeddings() throws {
         guard let query = SemanticScorer.queryVector(for: "subtracting complexity from life") else {
