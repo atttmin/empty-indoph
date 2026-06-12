@@ -20,7 +20,7 @@ nonisolated enum ServerSnapshotClientError: LocalizedError {
         case .invalidNamespace:
             "命名空间不能为空，且只能包含字母、数字、点、横线或下划线。"
         case .missingBearerToken:
-            "当前 server target 需要 Bearer Token。"
+            "当前 server target 需要有效凭证。若你用的是 Passkey，请重新登录账号。"
         case .invalidResponse:
             "Server 返回了无法识别的响应。"
         case .snapshotMissing:
@@ -88,16 +88,16 @@ nonisolated struct ServerSnapshotClient: SyncSnapshotBackupProvider {
             return trimmed
         }
 
-        func resolvedBearerToken() throws -> String? {
+        func resolvedAuthorizationHeader() throws -> String? {
             switch authMode {
             case .none:
                 return nil
-            case .bearer:
+            case .bearer, .passkeySession:
                 let trimmed = bearerToken.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else {
                     throw ServerSnapshotClientError.missingBearerToken
                 }
-                return trimmed
+                return "Bearer \(trimmed)"
             }
         }
     }
@@ -178,8 +178,8 @@ nonisolated struct ServerSnapshotClient: SyncSnapshotBackupProvider {
         if let schemaVersion {
             request.setValue(String(schemaVersion), forHTTPHeaderField: "X-Empty-Schema-Version")
         }
-        if let token = try configuration.resolvedBearerToken() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let authorizationHeader = try configuration.resolvedAuthorizationHeader() {
+            request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
         }
         request.httpBody = body
         return request

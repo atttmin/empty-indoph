@@ -57,11 +57,28 @@ final class AppSession: ObservableObject {
         isEphemeral ? .localOnly : syncSettings.liveMode
     }
 
-    var serverAuthToken: String {
+    var manualServerBearerToken: String {
         KeychainStore.read(
             account: SyncSettings.serverTokenAccount,
             service: Self.syncCredentialService
         ) ?? ""
+    }
+
+    var currentServerPasskeySession: ServerPasskeySession? {
+        guard let target = syncSettings.serverTarget,
+              target.authMode == .passkeySession,
+              let accountID = target.accountID,
+              let displayName = target.accountDisplayName
+        else {
+            return nil
+        }
+        return ServerPasskeySession(
+            accountID: accountID,
+            displayName: displayName,
+            email: target.accountEmail,
+            issuedAt: target.accountSignedInAt,
+            expiresAt: target.accountSessionExpiresAt
+        )
     }
 
     var serverLiveCursor: LiveSyncCursor? {
@@ -180,15 +197,33 @@ final class AppSession: ObservableObject {
 
     func saveServerTarget(baseURLString: String, namespace: String, authToken: String) throws {
         let trimmedToken = authToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        let authMode: ServerAuthMode = trimmedToken.isEmpty ? .none : .bearer
-        let configuration = ServerSnapshotClient.Configuration(
+        let provisionalConfiguration = ServerSnapshotClient.Configuration(
             baseURLString: baseURLString,
             namespace: namespace,
-            authMode: authMode,
-            bearerToken: trimmedToken
+            authMode: .none,
+            bearerToken: ""
         )
-        let normalizedBaseURL = try configuration.normalizedBaseURL().absoluteString
-        let normalizedNamespace = try configuration.normalizedNamespace()
+        let normalizedBaseURL = try provisionalConfiguration.normalizedBaseURL().absoluteString
+        let normalizedNamespace = try provisionalConfiguration.normalizedNamespace()
+
+        let previous = syncSettings.serverTarget
+        let identityChanged =
+            previous?.baseURLString != normalizedBaseURL
+            || previous?.namespace != normalizedNamespace
+        let previousSessionToken = previous.flatMap(serverSessionToken(for:)) ?? ""
+        let keepPasskeySession =
+            trimmedToken.isEmpty
+            && !identityChanged
+            && previous?.authMode == .passkeySession
+            && !previousSessionToken.isEmpty
+        let authMode: ServerAuthMode
+        if !trimmedToken.isEmpty {
+            authMode = .bearer
+        } else if keepPasskeySession {
+            authMode = .passkeySession
+        } else {
+            authMode = .none
+        }
 
         if trimmedToken.isEmpty {
             KeychainStore.delete(
@@ -203,14 +238,25 @@ final class AppSession: ObservableObject {
             )
         }
 
-        let previous = syncSettings.serverTarget
-        let identityChanged =
-            previous?.baseURLString != normalizedBaseURL
-            || previous?.namespace != normalizedNamespace
+        let shouldClearPreviousSession =
+            previous != nil
+            && (identityChanged || authMode != .passkeySession)
+        if shouldClearPreviousSession, let previous {
+            KeychainStore.delete(
+                account: serverSessionAccount(for: previous),
+                service: Self.syncCredentialService
+            )
+        }
+
         let nextTarget = SyncSettings.ServerBackupTarget(
             baseURLString: normalizedBaseURL,
             namespace: normalizedNamespace,
             authMode: authMode,
+            accountID: keepPasskeySession ? previous?.accountID : nil,
+            accountDisplayName: keepPasskeySession ? previous?.accountDisplayName : nil,
+            accountEmail: keepPasskeySession ? previous?.accountEmail : nil,
+            accountSignedInAt: keepPasskeySession ? previous?.accountSignedInAt : nil,
+            accountSessionExpiresAt: keepPasskeySession ? previous?.accountSessionExpiresAt : nil,
             lastSnapshotAt: identityChanged ? nil : previous?.lastSnapshotAt,
             lastValidatedAt: identityChanged ? nil : previous?.lastValidatedAt,
             liveCursor: identityChanged ? nil : previous?.liveCursor,
@@ -247,6 +293,10 @@ final class AppSession: ObservableObject {
             service: Self.syncCredentialService
         )
         if let previous {
+            KeychainStore.delete(
+                account: serverSessionAccount(for: previous),
+                service: Self.syncCredentialService
+            )
             try? mutationJournalStore.clear(for: previous)
         }
         var updated = syncSettings
@@ -339,7 +389,7 @@ final class AppSession: ObservableObject {
                 baseURLString: target.baseURLString,
                 namespace: target.namespace,
                 authMode: target.authMode,
-                bearerToken: serverAuthToken
+                bearerToken: effectiveServerAuthorizationToken(for: target)
             )
         )
     }
@@ -353,7 +403,21 @@ final class AppSession: ObservableObject {
                 baseURLString: target.baseURLString,
                 namespace: target.namespace,
                 authMode: target.authMode,
-                bearerToken: serverAuthToken
+                bearerToken: effectiveServerAuthorizationToken(for: target)
+            )
+        )
+    }
+
+    func makeServerPasskeyClient(authMode: ServerAuthMode = .none) throws -> ServerPasskeyClient {
+        guard let target = syncSettings.serverTarget else {
+            throw ServerPasskeyClientError.providerError("先保存一个 Empty Cloud / 自建 Server 目标。")
+        }
+        return ServerPasskeyClient(
+            configuration: .init(
+                baseURLString: target.baseURLString,
+                namespace: target.namespace,
+                authMode: authMode,
+                bearerToken: authMode == .passkeySession ? serverSessionToken(for: target) : ""
             )
         )
     }
@@ -362,6 +426,72 @@ final class AppSession: ObservableObject {
         try ServerSyncCoordinator(client: makeServerLiveSyncClient())
     }
 
+    func registerServerPasskeyAccount(displayName: String?) async throws -> ServerPasskeySession {
+        let status: LiveSyncProviderStatus
+        if let currentServerStatus {
+            status = currentServerStatus
+        } else {
+            status = await probeServerLiveStatus()
+        }
+        guard status.features.contains(ServerPasskeyFeature.authV1.rawValue) else {
+            throw ServerPasskeyClientError.unsupported
+        }
+        guard let target = syncSettings.serverTarget else {
+            throw ServerPasskeyClientError.providerError("先保存一个 Empty Cloud / 自建 Server 目标。")
+        }
+        let client = try makeServerPasskeyClient(authMode: .none)
+        let options = try await client.beginRegistration(displayName: displayName)
+        let finish = try await PlatformPasskeyCoordinator().register(options: options)
+        let result = try await client.completeRegistration(finish)
+        try persistServerPasskeySession(result, for: target)
+        refreshLiveSyncStatusesSoon()
+        return result.session
+    }
+
+    func signInServerPasskeyAccount() async throws -> ServerPasskeySession {
+        let status: LiveSyncProviderStatus
+        if let currentServerStatus {
+            status = currentServerStatus
+        } else {
+            status = await probeServerLiveStatus()
+        }
+        guard status.features.contains(ServerPasskeyFeature.authV1.rawValue) else {
+            throw ServerPasskeyClientError.unsupported
+        }
+        guard let target = syncSettings.serverTarget else {
+            throw ServerPasskeyClientError.providerError("先保存一个 Empty Cloud / 自建 Server 目标。")
+        }
+        let client = try makeServerPasskeyClient(authMode: .none)
+        let options = try await client.beginAuthentication()
+        let finish = try await PlatformPasskeyCoordinator().authenticate(options: options)
+        let result = try await client.completeAuthentication(finish)
+        try persistServerPasskeySession(result, for: target)
+        refreshLiveSyncStatusesSoon()
+        return result.session
+    }
+
+    func refreshServerPasskeySession() async throws -> ServerPasskeySession? {
+        guard let target = syncSettings.serverTarget else { return nil }
+        guard target.authMode == .passkeySession else { return nil }
+        let client = try makeServerPasskeyClient(authMode: .passkeySession)
+        let session = try await client.fetchSession()
+        if let session {
+            try persistServerPasskeySession(.init(sessionToken: serverSessionToken(for: target), session: session), for: target)
+        } else {
+            clearStoredServerPasskeySession(for: target, preserveTarget: true)
+        }
+        return session
+    }
+
+    func signOutServerPasskeyAccount() async throws {
+        guard let target = syncSettings.serverTarget else { return }
+        if target.authMode == .passkeySession {
+            let client = try makeServerPasskeyClient(authMode: .passkeySession)
+            try await client.signOut()
+        }
+        clearStoredServerPasskeySession(for: target, preserveTarget: true)
+        refreshLiveSyncStatusesSoon()
+    }
     func performServerLivePull(forceFullSnapshot: Bool = false) async throws -> ServerSyncPullSummary {
         guard let target = syncSettings.serverTarget else {
             throw ServerLiveSyncClientError.providerError("先保存一个 Empty Cloud / 自建 Server 目标。")
@@ -529,10 +659,14 @@ final class AppSession: ObservableObject {
         liveSyncStatuses.first { $0.kind == .server }
     }
 
+    var serverSupportsPasskeyAuth: Bool {
+        currentServerStatus?.features.contains(ServerPasskeyFeature.authV1.rawValue) == true
+    }
+
     private func probeServerLiveStatus() async -> LiveSyncProviderStatus {
         await ServerLiveSyncProvider(
             target: syncSettings.serverTarget,
-            bearerToken: serverAuthToken
+            bearerToken: syncSettings.serverTarget.map { effectiveServerAuthorizationToken(for: $0) } ?? ""
         ).status(selectedMode: effectiveLiveMode)
     }
 
@@ -541,7 +675,7 @@ final class AppSession: ObservableObject {
             CloudKitLiveSyncProvider(isEphemeral: isEphemeral),
             ServerLiveSyncProvider(
                 target: syncSettings.serverTarget,
-                bearerToken: serverAuthToken
+                bearerToken: syncSettings.serverTarget.map { effectiveServerAuthorizationToken(for: $0) } ?? ""
             ),
         ]
     }
@@ -604,6 +738,85 @@ final class AppSession: ObservableObject {
         Task { @MainActor in
             await refreshLiveSyncStatuses()
         }
+    }
+
+    private func serverSessionAccount(for target: SyncSettings.ServerBackupTarget) -> String {
+        "sync.server.session|\(target.baseURLString)|\(target.namespace)"
+    }
+
+    private func serverSessionToken(for target: SyncSettings.ServerBackupTarget) -> String {
+        KeychainStore.read(
+            account: serverSessionAccount(for: target),
+            service: Self.syncCredentialService
+        ) ?? ""
+    }
+
+    private func effectiveServerAuthorizationToken(for target: SyncSettings.ServerBackupTarget) -> String {
+        switch target.authMode {
+        case .none:
+            ""
+        case .bearer:
+            manualServerBearerToken
+        case .passkeySession:
+            serverSessionToken(for: target)
+        }
+    }
+
+    private func persistServerPasskeySession(_ result: ServerPasskeyAuthResult, for target: SyncSettings.ServerBackupTarget) throws {
+        try KeychainStore.save(
+            result.sessionToken,
+            account: serverSessionAccount(for: target),
+            service: Self.syncCredentialService
+        )
+        guard var current = syncSettings.serverTarget,
+              current.baseURLString == target.baseURLString,
+              current.namespace == target.namespace
+        else {
+            return
+        }
+        current.authMode = .passkeySession
+        current.accountID = result.session.accountID
+        current.accountDisplayName = result.session.displayName
+        current.accountEmail = result.session.email
+        current.accountSignedInAt = result.session.issuedAt ?? Date()
+        current.accountSessionExpiresAt = result.session.expiresAt
+        current.lastAutoSyncError = nil
+        current.nextAutoRetryAt = nil
+        current.consecutiveAutoSyncFailures = 0
+        var updated = syncSettings
+        updated.serverTarget = current
+        persist(updated)
+        restartAutoSyncLoopIfNeeded()
+    }
+
+    private func clearStoredServerPasskeySession(for target: SyncSettings.ServerBackupTarget, preserveTarget: Bool) {
+        KeychainStore.delete(
+            account: serverSessionAccount(for: target),
+            service: Self.syncCredentialService
+        )
+        guard preserveTarget,
+              var current = syncSettings.serverTarget,
+              current.baseURLString == target.baseURLString,
+              current.namespace == target.namespace
+        else {
+            return
+        }
+        current.authMode = manualServerBearerToken.isEmpty ? .none : .bearer
+        current.accountID = nil
+        current.accountDisplayName = nil
+        current.accountEmail = nil
+        current.accountSignedInAt = nil
+        current.accountSessionExpiresAt = nil
+        current.lastAutoSyncError = nil
+        current.nextAutoRetryAt = nil
+        current.consecutiveAutoSyncFailures = 0
+        if manualServerBearerToken.isEmpty {
+            current.autoSyncEnabled = false
+        }
+        var updated = syncSettings
+        updated.serverTarget = current
+        persist(updated)
+        restartAutoSyncLoopIfNeeded()
     }
 
     private func loadServerMutationJournal(for target: SyncSettings.ServerBackupTarget) throws -> SyncMutationJournal? {

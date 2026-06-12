@@ -44,20 +44,28 @@ nonisolated struct ServerLiveSyncProvider: LiveSyncProvider {
                 session: session
             ).healthCheck()
             let features = health.features ?? []
-            if features.contains(LiveSyncFeature.readerLiveSyncV1.rawValue) {
+            let hasLiveSync = features.contains(LiveSyncFeature.readerLiveSyncV1.rawValue)
+            let hasPasskey = features.contains(ServerPasskeyFeature.authV1.rawValue)
+            if hasLiveSync {
+                let detail = hasPasskey
+                    ? "这个 server 已声明 reader-live-sync-v1，并且支持 Passkey 登录。"
+                    : "这个 server 已声明 reader-live-sync-v1。客户端 pull/push 契约已就位，下一步只差把 coordinator 接入 live mode。"
                 return LiveSyncProviderStatus(
                     kind: kind,
                     title: title,
                     state: .contractReady,
-                    detail: "这个 server 已声明 reader-live-sync-v1。客户端 pull/push 契约已就位，下一步只差把 coordinator 接入 live mode。",
+                    detail: detail,
                     features: features
                 )
             }
+            let detail = hasPasskey
+                ? "这个 server 当前还只有 snapshot backup / restore，但已经声明了 Passkey 登录。"
+                : "这个 server 当前只适合 snapshot backup / restore；还没有声明 reader-live-sync-v1。"
             return LiveSyncProviderStatus(
                 kind: kind,
                 title: title,
                 state: .snapshotOnly,
-                detail: "这个 server 当前只适合 snapshot backup / restore；还没有声明 reader-live-sync-v1。",
+                detail: detail,
                 features: features
             )
         } catch {

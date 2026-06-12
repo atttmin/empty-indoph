@@ -45,10 +45,11 @@
 
 App 启动经 `AppSession` 读取 `SyncSettings`，再调用 `AppStores.makeContainer(syncMode:ephemeral:)` 构造容器。若选择 `cloudKit` 但容器初始化失败（本机未登录 iCloud、关闭签名的测试环境等），会自动以 `cloudKitDatabase: .none` 重建同一组磁盘 store——应用照常工作，仅不同步。
 
-第三方云路径当前分三层：
+第三方云路径当前分四层：
 - `FolderBackupProvider` — Files / File Provider 文件夹快照
 - `ServerSnapshotClient` — 兼容 Empty snapshot API 的 HTTPS server 快照（`GET /v1/health`、`PUT/GET /v1/reader-snapshots/{namespace}/latest`）
 - `ServerSyncCoordinator` — 对 **contract-ready** server 执行前台 live 协调
+- `ServerPasskeyClient` + `PlatformPasskeyCoordinator` — 对兼容 server 执行 Passkey 账号创建 / 登录 / 刷新 / 退出，会话 token 只进 Keychain
 
 `ServerSyncCoordinator` + `SyncMutationJournal` 的当前语义：
 - `pull`：`POST /v1/reader-live-sync/{namespace}/pull` → merge / tombstone apply
@@ -56,7 +57,7 @@ App 启动经 `AppSession` 读取 `SyncSettings`，再调用 `AppStores.makeCont
 - `sync`：先 pull、把 pulled state 记为新 baseline，再把本地未推送变更重新覆盖回去并 push
 - `auto sync`：应用在前台时按间隔自动 pull；若失败则按退避时间排队重试，若 journal 里还有本地变化再做增量 push
 
-这一步已经能让“自建 server 用户”基本照常使用，但仍**不是最终形态**：还没有真正后台调度、冲突策略 UI 或 Passkey 账号层。
+这一步已经能让“自建 server 用户”基本照常使用，但仍**不是最终形态**：还没有真正后台调度、冲突策略 UI；Passkey 也仍依赖兼容 server 提供 session / challenge / verify 契约。
 
 ### Local Store（仅本机）
 

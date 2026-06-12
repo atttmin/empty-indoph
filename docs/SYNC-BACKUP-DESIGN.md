@@ -244,7 +244,7 @@ HTTP 端点预留为：
 - `Empty/Services/SyncSettings.swift`
   - 存储 live sync provider、folder target、server target
 - `Empty/Services/AppSession.swift`
-  - App 级状态：`ModelContainer`、sync settings、切换 provider、folder/server target 持久化、provider 状态探测、前台自动 sync 调度
+  - App 级状态：`ModelContainer`、sync settings、切换 provider、folder/server target 持久化、provider 状态探测、前台自动 sync 调度、Passkey 会话持久化
 - `Empty/Services/SyncSnapshot.swift`
   - provider-neutral snapshot schema、capture / merge、stable fingerprint
 - `Empty/Services/SyncBackupProvider.swift`
@@ -253,6 +253,10 @@ HTTP 端点预留为：
   - folder bookmark 解析、写入 / 读取快照
 - `Empty/Services/ServerSnapshotClient.swift`
   - 兼容 Empty snapshot API 的 HTTPS client
+- `Empty/Services/ServerPasskeyClient.swift`
+  - 兼容 `empty-passkey-auth-v1` 的 session / register / login client
+- `Empty/Services/PlatformPasskeyCoordinator.swift`
+  - Apple Passkey ceremony 封装（注册 / 登录 assertion）
 - `Empty/Services/LiveSyncContract.swift`
   - delta / cursor / tombstone / pull-push 请求响应
 - `Empty/Services/LiveSyncProvider.swift`
@@ -260,7 +264,7 @@ HTTP 端点预留为：
 - `Empty/Services/CloudKitLiveSyncProvider.swift`
   - iCloud / CloudKit 状态探测（无 entitlement 时安全退回）
 - `Empty/Services/ServerLiveSyncProvider.swift`
-  - server live feature 探测
+  - server live feature / passkey feature 探测
 - `Empty/Services/ServerLiveSyncClient.swift`
   - future / manual live sync pull / push client
 - `Empty/Services/ServerSyncCoordinator.swift`
@@ -274,7 +278,7 @@ HTTP 端点预留为：
 - `Empty/Services/SyncUsageSummary.swift`
   - 把同步状态折叠成用户更容易理解的 plain-language 总结
 - `Empty/Views/SyncSettingsView.swift`
-  - 同步与备份 UI + provider 状态探测 + 简化引导 + 重试可见性 + 高级手动控件
+  - 同步与备份 UI + provider 状态探测 + Passkey 账号入口 + 简化引导 + 重试可见性 + 高级手动控件
 
 ### 修改
 
@@ -293,10 +297,10 @@ HTTP 端点预留为：
 
 ### Empty Cloud / 自建 server **完整后台 live sync**
 
-原因：虽然 cursor / delta / pull-push 契约、手动协调器、本地 mutation journal、前台自动调度与本地重试队列都已经在客户端成型，但还没有：
+原因：虽然 cursor / delta / pull-push 契约、手动协调器、本地 mutation journal、前台自动调度、本地重试队列与 Passkey 客户端壳层都已经在客户端成型，但还没有：
 - 真后台调度
 - 真实冲突合并策略 UI
-- Passkey 账号与设备授权
+- 服务端 device/session 管理与 key envelope
 
 所以本阶段已经实现：
 - `server snapshot client`
@@ -306,13 +310,21 @@ HTTP 端点预留为：
 - `foreground retry queue`
 - `manual live sync coordinator`
 - `foreground auto sync shell`
+- `passkey account shell`
 
 还**没有**把 server 提升成“后台、账号化”的完整 live sync mode。
 
-### Passkey / 账号体系
+### Passkey / 账号体系（部分实现）
 
-原因：需要 session / challenge / key envelope 设计。
+已实现客户端壳层：
+- 探测 `empty-passkey-auth-v1`
+- 创建账号 / 登录 / 刷新 / 退出
+- session token 只存 Keychain
 
+未实现部分仍在 server 侧：
+- 设备管理
+- challenge / verify 服务端实现
+- key envelope / 恢复策略
 ### Walrus / Sui wallet
 
 原因：
@@ -328,14 +340,13 @@ HTTP 端点预留为：
 ### Phase 2 — Empty Cloud / Custom Server 更完整后台 live sync
 
 - `ServerSyncProvider`
-- Passkey 登录
 - 后台 pull / push 调度
 - 冲突合并与设备 tombstone
 - 对象存储放快照与 blob
 
-### Phase 3 — Passkey + Wallet
+### Phase 3 — 更完整 Passkey + Wallet
 
-- Passkey 先做 Empty 账号登录
+- Passkey server 侧 session / challenge / device management
 - 若需要 Sui 身份，优先评估 `zkLogin`
 - 真正 native Sui passkey wallet 后置
 

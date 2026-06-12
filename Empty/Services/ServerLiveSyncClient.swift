@@ -86,8 +86,8 @@ nonisolated struct ServerLiveSyncClient {
         request.setValue("application/vnd.empty.reader-live-sync+json", forHTTPHeaderField: "Content-Type")
         request.setValue(configuration.deviceLabel, forHTTPHeaderField: "X-Empty-Device")
         request.setValue(String(schemaVersion), forHTTPHeaderField: "X-Empty-Schema-Version")
-        if let token = try configuration.resolvedBearerToken() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let authorizationHeader = try configuration.resolvedAuthorizationHeader() {
+            request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
         }
         request.httpBody = body
         return request

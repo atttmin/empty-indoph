@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Empty Cloud / 自建 server 的前台自动同步不再总是回推整库 full snapshot：客户端现在持久化本地 `SyncMutationJournal` baseline，pull 后只重放仍未推送的本地 upsert / tombstone，并在失败时排队自动重试；设置页也会直接显示待同步变化数量与下次重试时间。
 
+- Empty Cloud / 自建 server 现在带上了 Passkey 账号壳层：客户端可探测 `empty-passkey-auth-v1`，执行创建 / 登录 / 刷新 / 退出账号，会话 token 只留在 Keychain，设置页也新增了更接近日常心智的账号入口。
 ### Fixed
 
 - EPUB images in the paginated reader sometimes rendered blank: WebKit

@@ -97,7 +97,7 @@ struct LiveSyncProviderTests {
                 url: request.url!,
                 statusCode: 200,
                 headers: ["Content-Type": "application/json"],
-                body: "{\"status\":\"ok\",\"service\":\"Empty Sync\",\"features\":[\"reader-snapshots-v1\",\"reader-live-sync-v1\"]}".data(using: .utf8)!
+                body: "{\"status\":\"ok\",\"service\":\"Empty Sync\",\"features\":[\"reader-snapshots-v1\",\"reader-live-sync-v1\",\"empty-passkey-auth-v1\"]}".data(using: .utf8)!
             )
         }
         let status = await ServerLiveSyncProvider(
@@ -114,6 +114,8 @@ struct LiveSyncProviderTests {
 
         #expect(status.state == .contractReady)
         #expect(status.features.contains(LiveSyncFeature.readerLiveSyncV1.rawValue))
+        #expect(status.features.contains(ServerPasskeyFeature.authV1.rawValue))
+        #expect(status.detail.contains("Passkey"))
     }
 }
 

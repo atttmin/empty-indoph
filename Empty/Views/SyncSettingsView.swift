@@ -24,6 +24,7 @@ struct SyncSettingsView: View {
     @State private var serverBaseURL = ""
     @State private var serverNamespace = "default"
     @State private var serverToken = ""
+    @State private var serverDisplayName = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,6 +163,10 @@ struct SyncSettingsView: View {
                             statusMessage = "已打开自动同步。"
                         }
                         .disabled(isBusy)
+                    }
+                    if appSession.serverSupportsPasskeyAuth, appSession.currentServerPasskeySession == nil {
+                        actionButton(isBusy ? "登录中…" : "登录账号") { signInPasskeyAccount() }
+                            .disabled(isBusy)
                     }
                 }
             }
@@ -359,11 +364,10 @@ struct SyncSettingsView: View {
                 Text("如果你以后想在 Apple 之外也能同步，主要看这一栏。最简单的用法：填地址 → 测试连接 → 打开自动同步。")
                     .font(.system(size: 11.5))
                     .foregroundStyle(palette.ink2)
-
                 VStack(alignment: .leading, spacing: 8) {
                     labeledField("Base URL", placeholder: "https://sync.example.com", text: $serverBaseURL)
                     labeledField("Namespace", placeholder: "default", text: $serverNamespace)
-                    labeledSecureField("Bearer Token（可留空）", placeholder: "token-…", text: $serverToken)
+                    labeledSecureField("Bearer Token（可留空；有 Passkey 时通常不用填）", placeholder: "token-…", text: $serverToken)
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -377,6 +381,11 @@ struct SyncSettingsView: View {
                         Text("命名空间 · \(target.namespace) · \(target.authMode.title)")
                             .font(.system(size: 10.5))
                             .foregroundStyle(palette.ink3)
+                        if let displayName = target.accountDisplayName {
+                            Text("当前账号 · \(displayName)")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(palette.accent)
+                        }
                         if let nextRetryAt = target.nextAutoRetryAt {
                             Text("已安排重试 · \(nextRetryAt.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.system(size: 10.5))
@@ -389,6 +398,44 @@ struct SyncSettingsView: View {
                             Text("最近 server 备份 · \(lastSnapshotAt.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.system(size: 10.5))
                                 .foregroundStyle(palette.ink3)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .emptyCard(palette, radius: 12)
+                }
+
+                if appSession.serverSupportsPasskeyAuth || appSession.currentServerPasskeySession != nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("账号登录")
+                            .font(.system(size: 12.5, weight: .bold))
+                            .foregroundStyle(palette.ink)
+                        if let account = appSession.currentServerPasskeySession {
+                            Text("已用 Passkey 连接账号 \(account.displayName)。以后换设备时，再登录一次就能继续同步。")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(palette.ink2)
+                            if let expiresAt = account.expiresAt {
+                                Text("会话到期 · \(expiresAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(palette.ink3)
+                            }
+                            HStack(spacing: 8) {
+                                actionButton(isBusy ? "检查中…" : "刷新账号状态") { refreshPasskeyAccount() }
+                                    .disabled(isBusy)
+                                actionButton(isBusy ? "退出中…" : "退出账号") { signOutPasskeyAccount() }
+                                    .disabled(isBusy)
+                            }
+                        } else {
+                            Text("这个 server 已声明 Passkey 登录。你可以不再手动管理 token：第一次创建账号，之后直接登录。")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(palette.ink2)
+                            labeledField("显示名称（首次创建账号可选）", placeholder: "你的名字", text: $serverDisplayName)
+                            HStack(spacing: 8) {
+                                actionButton(isBusy ? "创建中…" : "创建 Passkey 账号") { registerPasskeyAccount() }
+                                    .disabled(isBusy)
+                                actionButton(isBusy ? "登录中…" : "已有账号登录") { signInPasskeyAccount() }
+                                    .disabled(isBusy)
+                            }
                         }
                     }
                     .padding(12)
@@ -538,6 +585,7 @@ struct SyncSettingsView: View {
                 Button(role: .destructive) {
                     appSession.clearServerTarget()
                     serverToken = ""
+                    serverDisplayName = ""
                     statusMessage = "已移除 server 目标。"
                 } label: {
                     Text("移除 server 目标")
@@ -555,7 +603,7 @@ struct SyncSettingsView: View {
                 .font(.system(size: 12, weight: .bold))
                 .kerning(1.4)
                 .foregroundStyle(palette.ink3)
-            Text("接下来会继续补 Passkey 登录、更完整的后台调度，以及更明确的冲突处理。对日常使用来说，你现在主要记住三件事就够了：单机就留在本机，多 Apple 设备就用 iCloud，跨平台 / 自建就填 server 再开自动同步。")
+            Text("接下来会继续补更完整的后台调度、冲突处理，以及后续的 Walrus / 便携导出层。对日常使用来说，你现在主要记住三件事就够了：单机就留在本机，多 Apple 设备就用 iCloud，跨平台 / 自建就填 server，再按需要登录账号并打开自动同步。")
                 .font(.system(size: 11.5))
                 .foregroundStyle(palette.ink2)
                 .padding(12)
@@ -691,13 +739,15 @@ struct SyncSettingsView: View {
             errorMessage = error.localizedDescription
         }
     }
-
     private func loadServerDraft() {
         if let target = appSession.syncSettings.serverTarget {
             serverBaseURL = target.baseURLString
             serverNamespace = target.namespace
+            serverDisplayName = target.accountDisplayName ?? ""
+        } else {
+            serverDisplayName = ""
         }
-        serverToken = appSession.serverAuthToken
+        serverToken = appSession.manualServerBearerToken
     }
 
     private func refreshLiveSyncStatuses() {
@@ -756,12 +806,12 @@ struct SyncSettingsView: View {
             return "已把文件夹快照合并回当前书库。"
         }
     }
-
     private func testServerConnection() {
         runBusyTask {
             let client = try makeCurrentServerSnapshotClient()
             let health = try await client.healthCheck()
             appSession.markServerValidated()
+            await appSession.refreshLiveSyncStatuses()
             let service = health.service ?? "server"
             let status = health.status ?? "ok"
             return "连接通过：\(service)（\(status)）。"
@@ -803,6 +853,45 @@ struct SyncSettingsView: View {
             authToken: serverToken
         )
         loadServerDraft()
+    }
+
+    private func registerPasskeyAccount() {
+        runBusyTask {
+            try refreshCurrentServerTarget()
+            let session = try await appSession.registerServerPasskeyAccount(
+                displayName: serverDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : serverDisplayName
+            )
+            loadServerDraft()
+            return "已创建并登录账号 \(session.displayName)。"
+        }
+    }
+
+    private func signInPasskeyAccount() {
+        runBusyTask {
+            try refreshCurrentServerTarget()
+            let session = try await appSession.signInServerPasskeyAccount()
+            loadServerDraft()
+            return "已登录账号 \(session.displayName)。"
+        }
+    }
+
+    private func refreshPasskeyAccount() {
+        runBusyTask {
+            let session = try await appSession.refreshServerPasskeySession()
+            loadServerDraft()
+            if let session {
+                return "账号状态正常：\(session.displayName)。"
+            }
+            return "当前没有有效的 Passkey 会话。"
+        }
+    }
+
+    private func signOutPasskeyAccount() {
+        runBusyTask {
+            try await appSession.signOutServerPasskeyAccount()
+            loadServerDraft()
+            return "已退出当前 Passkey 账号。"
+        }
     }
 
     private func pullFromLiveServer() {

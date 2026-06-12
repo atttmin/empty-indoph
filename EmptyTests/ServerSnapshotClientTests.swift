@@ -24,7 +24,12 @@ struct ServerSnapshotClientTests {
             serverTarget: .init(
                 baseURLString: "https://sync.example.com",
                 namespace: "reader-main",
-                authMode: .bearer,
+                authMode: .passkeySession,
+                accountID: "user-1",
+                accountDisplayName: "Davi",
+                accountEmail: "davi@example.com",
+                accountSignedInAt: Date(timeIntervalSince1970: 15),
+                accountSessionExpiresAt: Date(timeIntervalSince1970: 16),
                 lastSnapshotAt: Date(timeIntervalSince1970: 10),
                 lastValidatedAt: Date(timeIntervalSince1970: 20),
                 liveCursor: LiveSyncCursor(opaqueValue: "cursor-9"),
@@ -45,7 +50,12 @@ struct ServerSnapshotClientTests {
         #expect(loaded.liveMode == .localOnly)
         #expect(loaded.serverTarget?.baseURLString == "https://sync.example.com")
         #expect(loaded.serverTarget?.namespace == "reader-main")
-        #expect(loaded.serverTarget?.authMode == .bearer)
+        #expect(loaded.serverTarget?.authMode == .passkeySession)
+        #expect(loaded.serverTarget?.accountID == "user-1")
+        #expect(loaded.serverTarget?.accountDisplayName == "Davi")
+        #expect(loaded.serverTarget?.accountEmail == "davi@example.com")
+        #expect(loaded.serverTarget?.accountSignedInAt == Date(timeIntervalSince1970: 15))
+        #expect(loaded.serverTarget?.accountSessionExpiresAt == Date(timeIntervalSince1970: 16))
         #expect(loaded.serverTarget?.liveCursor?.opaqueValue == "cursor-9")
         #expect(loaded.serverTarget?.lastLivePullAt == Date(timeIntervalSince1970: 30))
         #expect(loaded.serverTarget?.lastLivePushAt == Date(timeIntervalSince1970: 40))

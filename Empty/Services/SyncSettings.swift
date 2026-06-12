@@ -74,11 +74,13 @@ nonisolated struct BackupProviderDescriptor: Identifiable, Equatable, Sendable {
 nonisolated enum ServerAuthMode: String, Codable, CaseIterable, Sendable {
     case none
     case bearer
+    case passkeySession
 
     var title: String {
         switch self {
         case .none: "无鉴权"
         case .bearer: "Bearer Token"
+        case .passkeySession: "Passkey 会话"
         }
     }
 }
@@ -104,6 +106,11 @@ nonisolated struct SyncSettings: Codable, Equatable, Sendable {
         var baseURLString: String
         var namespace: String
         var authMode: ServerAuthMode
+        var accountID: String? = nil
+        var accountDisplayName: String? = nil
+        var accountEmail: String? = nil
+        var accountSignedInAt: Date? = nil
+        var accountSessionExpiresAt: Date? = nil
         var lastSnapshotAt: Date?
         var lastValidatedAt: Date?
         var liveCursor: LiveSyncCursor? = nil

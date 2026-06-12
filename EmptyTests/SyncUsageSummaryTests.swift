@@ -38,6 +38,41 @@ struct SyncUsageSummaryTests {
         #expect(summary.title == "自建同步已接好")
         #expect(summary.tone == .accent)
     }
+    @Test func mentionsPasskeyWhenServerAccountConnected() {
+        let summary = SyncUsageSummaryBuilder.make(
+            liveMode: .localOnly,
+            folderTarget: nil,
+            serverTarget: .init(
+                baseURLString: "https://sync.example.com",
+                namespace: "reader-main",
+                authMode: .passkeySession,
+                accountID: "user-1",
+                accountDisplayName: "Davi",
+                accountEmail: "davi@example.com",
+                accountSignedInAt: Date(timeIntervalSince1970: 100),
+                accountSessionExpiresAt: nil,
+                lastSnapshotAt: nil,
+                lastValidatedAt: nil,
+                liveCursor: nil,
+                lastLivePullAt: nil,
+                lastLivePushAt: nil,
+                autoSyncEnabled: true,
+                autoSyncIntervalSeconds: 120,
+                lastAutoSyncAt: nil,
+                lastAutoSyncFingerprint: nil
+            ),
+            cloudStatus: nil,
+            serverStatus: .init(
+                kind: .server,
+                title: "Empty Cloud",
+                state: .contractReady,
+                detail: "ready"
+            )
+        )
+
+        #expect(summary.detail.contains("Passkey"))
+    }
+
     @Test func surfacesQueuedRetryForAutoSyncServer() {
         let retryAt = Date(timeIntervalSince1970: 3600)
         let summary = SyncUsageSummaryBuilder.make(
