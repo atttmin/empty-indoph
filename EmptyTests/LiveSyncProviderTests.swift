@@ -20,24 +20,41 @@ struct LiveSyncProviderTests {
         #expect(delta.tombstones.isEmpty)
     }
 
-    @Test func cloudKitProviderMapsAvailableToActiveAndNoAccountToSetup() async {
+    @Test func snapshotFingerprintIgnoresExportedAt() throws {
+        let earlier = makeProviderTestSnapshot()
+        var later = earlier
+        later.exportedAt = Date(timeIntervalSince1970: 9_999)
+        #expect(try earlier.stableFingerprint() == later.stableFingerprint())
+    }
+
+    @Test func cloudKitProviderMapsAvailableToActiveNoAccountToSetupAndMissingEntitlementToUnavailable() async {
         let active = await CloudKitLiveSyncProvider(
             isEphemeral: false,
+            hasEntitlement: { true },
             accountStatusLoader: { .available }
         ).status(selectedMode: .cloudKit)
         #expect(active.state == .active)
 
         let setupRequired = await CloudKitLiveSyncProvider(
             isEphemeral: false,
+            hasEntitlement: { true },
             accountStatusLoader: { .noAccount }
         ).status(selectedMode: .cloudKit)
         #expect(setupRequired.state == .setupRequired)
 
         let localAvailable = await CloudKitLiveSyncProvider(
             isEphemeral: false,
+            hasEntitlement: { true },
             accountStatusLoader: { .available }
         ).status(selectedMode: .localOnly)
         #expect(localAvailable.state == .available)
+
+        let unavailable = await CloudKitLiveSyncProvider(
+            isEphemeral: false,
+            hasEntitlement: { false },
+            accountStatusLoader: { .available }
+        ).status(selectedMode: .cloudKit)
+        #expect(unavailable.state == .unavailable)
     }
 
     @Test func serverProviderNeedsSavedTargetBeforeProbe() async {

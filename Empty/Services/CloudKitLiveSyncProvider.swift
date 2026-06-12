@@ -5,16 +5,24 @@
 
 import CloudKit
 import Foundation
+import Security
 
 nonisolated struct CloudKitLiveSyncProvider: LiveSyncProvider {
+    private static let defaultEntitlementLoader: @Sendable () -> Bool = {
+        defaultHasCloudKitEntitlement()
+    }
+
     private let isEphemeral: Bool
+    private let hasEntitlement: @Sendable () -> Bool
     private let accountStatusLoader: @Sendable () async throws -> CKAccountStatus
 
     init(
         isEphemeral: Bool,
+        hasEntitlement: @escaping @Sendable () -> Bool = Self.defaultEntitlementLoader,
         accountStatusLoader: @escaping @Sendable () async throws -> CKAccountStatus = Self.defaultAccountStatus
     ) {
         self.isEphemeral = isEphemeral
+        self.hasEntitlement = hasEntitlement
         self.accountStatusLoader = accountStatusLoader
     }
 
@@ -28,6 +36,15 @@ nonisolated struct CloudKitLiveSyncProvider: LiveSyncProvider {
                 title: title,
                 state: .unavailable,
                 detail: "当前是测试 / clean-room 容器，实时同步固定为仅本机。"
+            )
+        }
+
+        guard hasEntitlement() else {
+            return LiveSyncProviderStatus(
+                kind: kind,
+                title: title,
+                state: .unavailable,
+                detail: "当前运行的 app bundle 没有 iCloud / CloudKit entitlement；已自动退回本机模式。"
             )
         }
 
@@ -87,6 +104,29 @@ nonisolated struct CloudKitLiveSyncProvider: LiveSyncProvider {
                 detail: "读取 CloudKit 状态失败：\(error.localizedDescription)"
             )
         }
+    }
+
+    private static func defaultHasCloudKitEntitlement() -> Bool {
+        #if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        let keys = [
+            "com.apple.developer.icloud-services",
+            "com.apple.developer.icloud-container-identifiers",
+            "com.apple.developer.ubiquity-container-identifiers",
+        ]
+        for key in keys {
+            let value = SecTaskCopyValueForEntitlement(task, key as CFString, nil)
+            if let array = value as? [Any], !array.isEmpty {
+                return true
+            }
+            if value != nil {
+                return true
+            }
+        }
+        return false
+        #else
+        true
+        #endif
     }
 
     private static func defaultAccountStatus() async throws -> CKAccountStatus {

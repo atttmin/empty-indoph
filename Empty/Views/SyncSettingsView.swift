@@ -344,8 +344,18 @@ struct SyncSettingsView: View {
                                 .font(.system(size: 10.5))
                                 .foregroundStyle(palette.ink3)
                         }
+                        if let lastAutoSyncAt = target.lastAutoSyncAt {
+                            Text("上次自动同步 · \(lastAutoSyncAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(palette.ink3)
+                        }
                         if let shortCursor = target.shortCursor {
                             Text("当前 cursor · \(shortCursor)")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(palette.ink3)
+                        }
+                        if let shortFingerprint = target.shortFingerprint {
+                            Text("上次指纹 · \(shortFingerprint)")
                                 .font(.system(size: 10.5, design: .monospaced))
                                 .foregroundStyle(palette.ink3)
                         }
@@ -383,12 +393,51 @@ struct SyncSettingsView: View {
                             .font(.system(size: 11.5))
                             .foregroundStyle(palette.ink2)
                         if status.state == .contractReady {
+                            Toggle(isOn: Binding(
+                                get: { appSession.serverAutoSyncEnabled },
+                                set: { appSession.setServerAutoSyncEnabled($0) }
+                            )) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("自动同步")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(palette.ink)
+                                    Text("仅在前台运行；每 \(appSession.serverAutoSyncIntervalSeconds) 秒自动拉取并按需推送 full-snapshot delta。")
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(palette.ink3)
+                                }
+                            }
+                            .toggleStyle(.switch)
+
+                            Stepper(value: Binding(
+                                get: { appSession.serverAutoSyncIntervalSeconds },
+                                set: { appSession.setServerAutoSyncIntervalSeconds($0) }
+                            ), in: 30...600, step: 30) {
+                                Text("自动同步间隔 · \(appSession.serverAutoSyncIntervalSeconds) 秒")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(palette.ink2)
+                            }
+
+                            if appSession.autoSyncRuntime.isEnabled {
+                                Text(appSession.autoSyncRuntime.isRunning
+                                     ? "自动同步正在运行 · \(appSession.autoSyncRuntime.lastTrigger ?? "…")"
+                                     : "自动同步已待命")
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(appSession.autoSyncRuntime.isRunning ? palette.accent : palette.ink3)
+                                if let lastError = appSession.autoSyncRuntime.lastError {
+                                    Text("最近错误 · \(lastError)")
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(.red)
+                                }
+                            }
+
                             HStack(spacing: 8) {
                                 actionButton(isBusy ? "拉取中…" : "拉取增量") { pullFromLiveServer() }
                                     .disabled(isBusy)
                                 actionButton(isBusy ? "推送中…" : "推送当前库") { pushToLiveServer() }
                                     .disabled(isBusy)
                                 actionButton(isBusy ? "同步中…" : "双向同步") { syncLiveServer() }
+                                    .disabled(isBusy)
+                                actionButton(isBusy ? "自动中…" : "立即自动同步") { runServerAutoSyncNow() }
                                     .disabled(isBusy)
                             }
                             Button(role: .destructive) {
@@ -687,6 +736,13 @@ struct SyncSettingsView: View {
             appSession.markServerLivePullCompleted(cursor: summary.pull.cursor, at: summary.pull.pulledAt)
             appSession.markServerLivePushCompleted(cursor: summary.push.cursor ?? summary.pull.cursor, at: summary.push.pushedAt)
             return "双向同步完成：pull \(summary.pull.appliedRecordCount) / push \(summary.push.pushedRecordCount)。"
+        }
+    }
+
+    private func runServerAutoSyncNow() {
+        runBusyTask {
+            let message = try await appSession.runAutomaticServerSync(force: true, trigger: "manual-button")
+            return message ?? "当前没有可执行的自动同步动作。"
         }
     }
 

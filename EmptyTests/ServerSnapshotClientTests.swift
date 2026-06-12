@@ -29,7 +29,11 @@ struct ServerSnapshotClientTests {
                 lastValidatedAt: Date(timeIntervalSince1970: 20),
                 liveCursor: LiveSyncCursor(opaqueValue: "cursor-9"),
                 lastLivePullAt: Date(timeIntervalSince1970: 30),
-                lastLivePushAt: Date(timeIntervalSince1970: 40)
+                lastLivePushAt: Date(timeIntervalSince1970: 40),
+                autoSyncEnabled: true,
+                autoSyncIntervalSeconds: 180,
+                lastAutoSyncAt: Date(timeIntervalSince1970: 50),
+                lastAutoSyncFingerprint: "abcdef1234567890"
             )
         )
         settings.save(defaults: defaults)
@@ -42,6 +46,10 @@ struct ServerSnapshotClientTests {
         #expect(loaded.serverTarget?.liveCursor?.opaqueValue == "cursor-9")
         #expect(loaded.serverTarget?.lastLivePullAt == Date(timeIntervalSince1970: 30))
         #expect(loaded.serverTarget?.lastLivePushAt == Date(timeIntervalSince1970: 40))
+        #expect(loaded.serverTarget?.autoSyncEnabled == true)
+        #expect(loaded.serverTarget?.clampedAutoSyncIntervalSeconds == 180)
+        #expect(loaded.serverTarget?.lastAutoSyncAt == Date(timeIntervalSince1970: 50))
+        #expect(loaded.serverTarget?.shortFingerprint == "abcdef123456")
     }
 
     @Test func syncSettingsLoadsLegacyV1Payload() throws {

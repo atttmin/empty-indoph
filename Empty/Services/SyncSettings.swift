@@ -109,6 +109,10 @@ nonisolated struct SyncSettings: Codable, Equatable, Sendable {
         var liveCursor: LiveSyncCursor? = nil
         var lastLivePullAt: Date? = nil
         var lastLivePushAt: Date? = nil
+        var autoSyncEnabled: Bool = false
+        var autoSyncIntervalSeconds: Int = 120
+        var lastAutoSyncAt: Date? = nil
+        var lastAutoSyncFingerprint: String? = nil
 
         var displayName: String {
             guard let url = URL(string: baseURLString), let host = url.host(), !host.isEmpty else {
@@ -120,6 +124,15 @@ nonisolated struct SyncSettings: Codable, Equatable, Sendable {
         var shortCursor: String? {
             guard let opaqueValue = liveCursor?.opaqueValue, !opaqueValue.isEmpty else { return nil }
             return String(opaqueValue.prefix(18))
+        }
+
+        var clampedAutoSyncIntervalSeconds: Int {
+            min(max(autoSyncIntervalSeconds, 30), 3600)
+        }
+
+        var shortFingerprint: String? {
+            guard let lastAutoSyncFingerprint, !lastAutoSyncFingerprint.isEmpty else { return nil }
+            return String(lastAutoSyncFingerprint.prefix(12))
         }
     }
 

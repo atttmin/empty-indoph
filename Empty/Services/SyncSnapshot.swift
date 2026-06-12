@@ -3,6 +3,7 @@
 //  Empty
 //
 
+import CryptoKit
 import Foundation
 import SwiftData
 
@@ -46,6 +47,14 @@ nonisolated struct SyncSnapshot: Codable, Equatable, Sendable {
             bookmarks: try modelContext.fetch(FetchDescriptor<Bookmark>()).map(BookmarkRecord.init).sorted { $0.createdAt < $1.createdAt },
             memoryItems: try modelContext.fetch(FetchDescriptor<MemoryItem>()).map(MemoryItemRecord.init).sorted { $0.updatedAt < $1.updatedAt }
         )
+    }
+
+    func stableFingerprint() throws -> String {
+        var fingerprintSnapshot = self
+        fingerprintSnapshot.exportedAt = .distantPast
+        let data = try SyncSnapshotCodec.makeEncoder().encode(fingerprintSnapshot)
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     @MainActor

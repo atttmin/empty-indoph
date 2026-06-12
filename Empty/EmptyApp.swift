@@ -8,6 +8,7 @@ import SwiftUI
 
 @main
 struct EmptyApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var appSession = AppSession()
 
     var body: some Scene {
@@ -22,6 +23,9 @@ struct EmptyApp: App {
         .modelContainer(appSession.container)
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1360, height: 860)
+        .onChange(of: scenePhase, initial: true) { _, newPhase in
+            appSession.handleScenePhase(newPhase)
+        }
         #else
         WindowGroup {
             IOSRootView()
@@ -29,6 +33,9 @@ struct EmptyApp: App {
                 .environmentObject(appSession)
         }
         .modelContainer(appSession.container)
+        .onChange(of: scenePhase, initial: true) { _, newPhase in
+            appSession.handleScenePhase(newPhase)
+        }
         #endif
     }
 }

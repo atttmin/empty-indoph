@@ -17,8 +17,12 @@ final class AppSession: ObservableObject {
     @Published private(set) var containerRevision = UUID()
     @Published private(set) var liveSyncStatuses: [LiveSyncProviderStatus] = []
     @Published private(set) var isRefreshingLiveSyncStatuses = false
+    @Published private(set) var autoSyncRuntime = ServerAutoSyncRuntimeState()
 
     let isEphemeral: Bool
+
+    private var currentScenePhase: ScenePhase = .active
+    private var autoSyncTask: Task<Void, Never>?
 
     init(isEphemeral override: Bool? = nil) {
         let process = ProcessInfo.processInfo
@@ -33,9 +37,14 @@ final class AppSession: ObservableObject {
         } catch {
             fatalError("Failed to set up persistence: \(error)")
         }
+        refreshAutoSyncRuntime()
         Task { @MainActor in
             await refreshLiveSyncStatuses()
         }
+    }
+
+    deinit {
+        autoSyncTask?.cancel()
     }
 
     static var preview: AppSession {
@@ -57,9 +66,34 @@ final class AppSession: ObservableObject {
         syncSettings.serverTarget?.liveCursor
     }
 
+    var serverAutoSyncEnabled: Bool {
+        syncSettings.serverTarget?.autoSyncEnabled == true
+    }
+
+    var serverAutoSyncIntervalSeconds: Int {
+        syncSettings.serverTarget?.clampedAutoSyncIntervalSeconds ?? 120
+    }
+
+    func handleScenePhase(_ phase: ScenePhase) {
+        currentScenePhase = phase
+        restartAutoSyncLoopIfNeeded()
+        if phase == .background, serverAutoSyncEnabled {
+            Task { @MainActor in
+                do {
+                    _ = try await runAutomaticServerSync(force: false, trigger: "background")
+                } catch {
+                    autoSyncRuntime.lastError = error.localizedDescription
+                }
+            }
+        }
+    }
+
     func refreshLiveSyncStatuses() async {
         isRefreshingLiveSyncStatuses = true
-        defer { isRefreshingLiveSyncStatuses = false }
+        defer {
+            isRefreshingLiveSyncStatuses = false
+            restartAutoSyncLoopIfNeeded()
+        }
 
         var statuses: [LiveSyncProviderStatus] = []
         for provider in makeLiveSyncProviders() {
@@ -79,6 +113,7 @@ final class AppSession: ObservableObject {
         syncSettings = updated
         container = newContainer
         containerRevision = UUID()
+        refreshAutoSyncRuntime()
         refreshLiveSyncStatusesSoon()
     }
 
@@ -148,7 +183,11 @@ final class AppSession: ObservableObject {
             lastValidatedAt: previous?.lastValidatedAt,
             liveCursor: previous?.liveCursor,
             lastLivePullAt: previous?.lastLivePullAt,
-            lastLivePushAt: previous?.lastLivePushAt
+            lastLivePushAt: previous?.lastLivePushAt,
+            autoSyncEnabled: previous?.autoSyncEnabled ?? false,
+            autoSyncIntervalSeconds: previous?.clampedAutoSyncIntervalSeconds ?? 120,
+            lastAutoSyncAt: previous?.lastAutoSyncAt,
+            lastAutoSyncFingerprint: previous?.lastAutoSyncFingerprint
         )
         persist(updated)
         refreshLiveSyncStatusesSoon()
@@ -208,6 +247,26 @@ final class AppSession: ObservableObject {
         persist(updated)
     }
 
+    func setServerAutoSyncEnabled(_ enabled: Bool) {
+        guard var target = syncSettings.serverTarget else { return }
+        target.autoSyncEnabled = enabled
+        var updated = syncSettings
+        updated.serverTarget = target
+        persist(updated)
+        refreshAutoSyncRuntime()
+        restartAutoSyncLoopIfNeeded()
+    }
+
+    func setServerAutoSyncIntervalSeconds(_ seconds: Int) {
+        guard var target = syncSettings.serverTarget else { return }
+        target.autoSyncIntervalSeconds = min(max(seconds, 30), 3600)
+        var updated = syncSettings
+        updated.serverTarget = target
+        persist(updated)
+        refreshAutoSyncRuntime()
+        restartAutoSyncLoopIfNeeded()
+    }
+
     func makeServerSnapshotClient() throws -> ServerSnapshotClient {
         guard let target = syncSettings.serverTarget else {
             throw ServerSnapshotClientError.providerError("先保存一个 Empty Cloud / 自建 Server 目标。")
@@ -240,6 +299,81 @@ final class AppSession: ObservableObject {
         try ServerSyncCoordinator(client: makeServerLiveSyncClient())
     }
 
+    func runAutomaticServerSync(force: Bool, trigger: String) async throws -> String? {
+        guard !isEphemeral else { return nil }
+        guard var target = syncSettings.serverTarget else { return nil }
+        guard force || target.autoSyncEnabled else { return nil }
+
+        let status: LiveSyncProviderStatus
+        if let currentServerStatus {
+            status = currentServerStatus
+        } else {
+            status = await probeServerLiveStatus()
+        }
+        guard status.state == .contractReady else {
+            if force {
+                throw ServerLiveSyncClientError.unsupported
+            }
+            return nil
+        }
+
+        autoSyncRuntime.isEnabled = target.autoSyncEnabled
+        autoSyncRuntime.isRunning = true
+        autoSyncRuntime.lastTrigger = trigger
+        autoSyncRuntime.lastError = nil
+        defer {
+            autoSyncRuntime.isRunning = false
+        }
+
+        let coordinator = try makeServerSyncCoordinator()
+        let pullSummary = try await coordinator.pull(
+            into: container.mainContext,
+            cursor: target.liveCursor,
+            forceFullSnapshot: target.liveCursor == nil
+        )
+        markServerLivePullCompleted(cursor: pullSummary.cursor, at: pullSummary.pulledAt)
+        target = syncSettings.serverTarget ?? target
+
+        let snapshot = try SyncSnapshot.capture(from: container.mainContext)
+        let fingerprint = try snapshot.stableFingerprint()
+        let shouldPush = force || target.lastAutoSyncFingerprint != fingerprint
+
+        if shouldPush {
+            let pushSummary = try await coordinator.push(
+                from: container.mainContext,
+                baseCursor: pullSummary.cursor
+            )
+            markServerLivePushCompleted(cursor: pushSummary.cursor, at: pushSummary.pushedAt)
+        }
+
+        guard var refreshedTarget = syncSettings.serverTarget else {
+            return nil
+        }
+        refreshedTarget.lastAutoSyncAt = Date()
+        if shouldPush {
+            refreshedTarget.lastAutoSyncFingerprint = fingerprint
+        }
+        var updated = syncSettings
+        updated.serverTarget = refreshedTarget
+        persist(updated)
+
+        autoSyncRuntime.lastSyncedAt = refreshedTarget.lastAutoSyncAt
+        autoSyncRuntime.lastFingerprintPrefix = refreshedTarget.shortFingerprint
+        let action = shouldPush ? "pull + push" : "pull only"
+        return "自动同步完成（\(action)）。"
+    }
+
+    private var currentServerStatus: LiveSyncProviderStatus? {
+        liveSyncStatuses.first { $0.kind == .server }
+    }
+
+    private func probeServerLiveStatus() async -> LiveSyncProviderStatus {
+        await ServerLiveSyncProvider(
+            target: syncSettings.serverTarget,
+            bearerToken: serverAuthToken
+        ).status(selectedMode: effectiveLiveMode)
+    }
+
     private func makeLiveSyncProviders() -> [any LiveSyncProvider] {
         [
             CloudKitLiveSyncProvider(isEphemeral: isEphemeral),
@@ -250,14 +384,59 @@ final class AppSession: ObservableObject {
         ]
     }
 
+    private func restartAutoSyncLoopIfNeeded() {
+        autoSyncTask?.cancel()
+        autoSyncTask = nil
+        refreshAutoSyncRuntime()
+        guard shouldRunAutoSyncLoop else { return }
+        autoSyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.runAutomaticServerSync(force: false, trigger: "enabled")
+            } catch {
+                self.autoSyncRuntime.lastError = error.localizedDescription
+            }
+            while !Task.isCancelled {
+                let interval = UInt64(self.serverAutoSyncIntervalSeconds) * 1_000_000_000
+                try? await Task.sleep(nanoseconds: interval)
+                if Task.isCancelled || !self.shouldRunAutoSyncLoop { return }
+                do {
+                    _ = try await self.runAutomaticServerSync(force: false, trigger: "timer")
+                } catch {
+                    self.autoSyncRuntime.lastError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private var shouldRunAutoSyncLoop: Bool {
+        guard !isEphemeral,
+              currentScenePhase == .active,
+              serverAutoSyncEnabled,
+              currentServerStatus?.state == .contractReady else {
+            return false
+        }
+        return true
+    }
+
     private func refreshLiveSyncStatusesSoon() {
         Task { @MainActor in
             await refreshLiveSyncStatuses()
         }
     }
 
+    private func refreshAutoSyncRuntime() {
+        autoSyncRuntime.isEnabled = syncSettings.serverTarget?.autoSyncEnabled ?? false
+        autoSyncRuntime.lastSyncedAt = syncSettings.serverTarget?.lastAutoSyncAt
+        autoSyncRuntime.lastFingerprintPrefix = syncSettings.serverTarget?.shortFingerprint
+        if autoSyncRuntime.isEnabled == false {
+            autoSyncRuntime.lastTrigger = nil
+        }
+    }
+
     private func persist(_ settings: SyncSettings) {
         settings.save()
         syncSettings = settings
+        refreshAutoSyncRuntime()
     }
 }
