@@ -282,6 +282,10 @@ final class AppSession: ObservableObject {
             lastLivePushAt: identityChanged ? nil : previous?.lastLivePushAt,
             autoSyncEnabled: previous?.autoSyncEnabled ?? false,
             autoSyncIntervalSeconds: previous?.clampedAutoSyncIntervalSeconds ?? 120,
+            conflictPolicy: previous?.conflictPolicy ?? .keepLocal,
+            lastConflictResolvedAt: identityChanged ? nil : previous?.lastConflictResolvedAt,
+            lastConflictCount: identityChanged ? 0 : previous?.lastConflictCount ?? 0,
+            lastConflictPolicy: identityChanged ? nil : previous?.lastConflictPolicy,
             lastAutoSyncAt: identityChanged ? nil : previous?.lastAutoSyncAt,
             lastAutoSyncFingerprint: identityChanged ? nil : previous?.lastAutoSyncFingerprint,
             consecutiveAutoSyncFailures: identityChanged ? 0 : previous?.consecutiveAutoSyncFailures ?? 0,
@@ -396,6 +400,34 @@ final class AppSession: ObservableObject {
         updated.serverTarget = target
         persist(updated)
         restartAutoSyncLoopIfNeeded()
+    }
+
+    func setServerConflictPolicy(_ policy: ServerSyncConflictPolicy) {
+        guard var target = syncSettings.serverTarget else { return }
+        target.conflictPolicy = policy
+        var updated = syncSettings
+        updated.serverTarget = target
+        persist(updated)
+    }
+
+    private func markServerConflictResolved(_ summary: ServerSyncConflictSummary) {
+        guard var target = syncSettings.serverTarget else { return }
+        target.lastConflictResolvedAt = summary.resolvedAt
+        target.lastConflictCount = summary.conflictCount
+        target.lastConflictPolicy = summary.policy
+        var updated = syncSettings
+        updated.serverTarget = target
+        persist(updated)
+    }
+
+    private func clearServerConflictResolved() {
+        guard var target = syncSettings.serverTarget else { return }
+        target.lastConflictResolvedAt = nil
+        target.lastConflictCount = 0
+        target.lastConflictPolicy = nil
+        var updated = syncSettings
+        updated.serverTarget = target
+        persist(updated)
     }
 
     func makeServerSnapshotClient() throws -> ServerSnapshotClient {
@@ -568,13 +600,11 @@ final class AppSession: ObservableObject {
         }
 
         let localSnapshot = try SyncSnapshot.capture(from: container.mainContext)
-        let localDelta: ReaderLiveSyncDelta
-        if forcePush {
-            localDelta = .bootstrap(from: localSnapshot)
-        } else if let journal = try loadServerMutationJournal(for: target) {
-            localDelta = journal.makeDelta(to: localSnapshot)
+        let localPendingDelta: ReaderLiveSyncDelta
+        if let journal = try loadServerMutationJournal(for: target) {
+            localPendingDelta = journal.makeDelta(to: localSnapshot)
         } else {
-            localDelta = .bootstrap(from: localSnapshot)
+            localPendingDelta = .bootstrap(from: localSnapshot)
         }
 
         let pullSummary = try await makeServerSyncCoordinator().pull(
@@ -587,18 +617,32 @@ final class AppSession: ObservableObject {
         let pulledSnapshot = try SyncSnapshot.capture(from: container.mainContext)
         try persistServerMutationBaseline(pulledSnapshot, for: activeTarget)
 
-        if localDelta.hasChanges {
-            try localDelta.merge(into: container.mainContext)
+        let remoteAppliedDelta = SyncMutationJournal(baselineSnapshot: localSnapshot, savedAt: pullSummary.pulledAt)
+            .makeDelta(to: pulledSnapshot)
+        let resolution = ServerSyncConflictResolver.resolve(
+            localDelta: localPendingDelta,
+            remoteDelta: remoteAppliedDelta,
+            policy: target.conflictPolicy,
+            resolvedAt: pullSummary.pulledAt
+        )
+        if let summary = resolution.summary {
+            markServerConflictResolved(summary)
+        } else {
+            clearServerConflictResolved()
         }
 
-        let reconciledSnapshot = localDelta.hasChanges
+        if resolution.deltaToApplyLocally.hasChanges {
+            try resolution.deltaToApplyLocally.merge(into: container.mainContext)
+        }
+
+        let reconciledSnapshot = resolution.deltaToApplyLocally.hasChanges
             ? try SyncSnapshot.capture(from: container.mainContext)
             : pulledSnapshot
         let deltaToPush: ReaderLiveSyncDelta?
-        if localDelta.hasChanges {
-            deltaToPush = localDelta
-        } else if forcePush {
+        if forcePush {
             deltaToPush = .bootstrap(from: reconciledSnapshot)
+        } else if resolution.deltaToPush.hasChanges {
+            deltaToPush = resolution.deltaToPush
         } else {
             deltaToPush = nil
         }
@@ -622,7 +666,11 @@ final class AppSession: ObservableObject {
         }
 
         refreshServerPendingMutations()
-        return ServerSyncRoundTripSummary(pull: pullSummary, push: pushSummary)
+        return ServerSyncRoundTripSummary(
+            pull: pullSummary,
+            push: pushSummary,
+            conflict: resolution.summary
+        )
     }
 
     func runAutomaticServerSync(force: Bool, trigger: String) async throws -> String? {
@@ -662,7 +710,8 @@ final class AppSession: ObservableObject {
             autoSyncRuntime.lastSyncedAt = refreshedTarget.lastAutoSyncAt
             autoSyncRuntime.lastFingerprintPrefix = refreshedTarget.shortFingerprint
             let action = summary.push.changeCount > 0 || (force && summary.push.wasFullSnapshot) ? "pull + push" : "pull only"
-            return "自动同步完成（\(action)）。"
+            let conflictSuffix = summary.conflict.map { "；\($0.conflictCount) 处冲突按\($0.policy.shortLabel)处理" } ?? ""
+            return "自动同步完成（\(action)\(conflictSuffix)）。"
         } catch {
             if syncSettings.serverTarget?.autoSyncEnabled == true {
                 markServerAutoSyncFailed(error)

@@ -54,10 +54,11 @@ App 启动经 `AppSession` 读取 `SyncSettings`，再调用 `AppStores.makeCont
 `ServerSyncCoordinator` + `SyncMutationJournal` + `ServerBackgroundSyncScheduler` 的当前语义：
 - `pull`：`POST /v1/reader-live-sync/{namespace}/pull` → merge / tombstone apply
 - `push`：根据本地 journal baseline 只发送变更过的 upsert / tombstone；首次或强制同步时才退回 full-snapshot delta
-- `sync`：先 pull、把 pulled state 记为新 baseline，再把本地未推送变更重新覆盖回去并 push
+- `sync`：先 pull、把 pulled state 记为新 baseline，再按冲突策略处理本地未推送变更并 push
 - `auto sync`：前台有定时 loop；失败后按退避时间排队重试；切到后台后，客户端还会通过 iOS `BGAppRefreshTask` / macOS `NSBackgroundActivityScheduler` 继续申请一次系统唤醒
+- `conflict policy`：当前提供两档 —— `keepLocal`（本机优先）与 `keepRemote`（云端优先）；设置页会显示最近一次冲突按哪种策略处理
 
-这一步已经能让“自建 server 用户”基本照常使用，但仍**不是最终形态**：还没有真正持久队列、完整冲突策略 UI；Passkey 也仍依赖兼容 server 提供 session / challenge / verify 契约。
+这一步已经能让“自建 server 用户”基本照常使用，但仍**不是最终形态**：还没有真正持久队列、逐条 diff 审阅 UI；Passkey 也仍依赖兼容 server 提供 session / challenge / verify 契约。
 
 ### Local Store（仅本机）
 

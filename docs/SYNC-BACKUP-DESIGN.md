@@ -234,6 +234,7 @@ HTTP 端点预留为：
 - `pull` 会先 merge record，再应用 tombstone 删除
 - cursor、上次 pull 时间、上次 push 时间、上次 baseline 指纹持久化在 `SyncSettings.serverTarget`
 - 自动同步在前台有定时 loop；若失败则按退避时间排队重试；切到后台后，客户端还会继续申请一次系统唤醒，再补一次 pull / push
+- 冲突策略当前提供两档：`keepLocal`（本机优先）与 `keepRemote`（云端优先）；冲突发生后会把最近一次处理结果写回设置页
 
 ---
 
@@ -244,7 +245,7 @@ HTTP 端点预留为：
 - `Empty/Services/SyncSettings.swift`
   - 存储 live sync provider、folder target、server target
 - `Empty/Services/AppSession.swift`
-  - App 级状态：`ModelContainer`、sync settings、切换 provider、folder/server target 持久化、provider 状态探测、前台 auto sync、后台调度壳层、Passkey 会话持久化
+  - App 级状态：`ModelContainer`、sync settings、切换 provider、folder/server target 持久化、provider 状态探测、自动 sync、后台调度壳层、冲突策略持久化、Passkey 会话持久化
 - `Empty/Services/SyncSnapshot.swift`
   - provider-neutral snapshot schema、capture / merge、stable fingerprint
 - `Empty/Services/SyncBackupProvider.swift`
@@ -269,6 +270,8 @@ HTTP 端点预留为：
   - manual / future live sync pull / push client
 - `Empty/Services/ServerSyncCoordinator.swift`
   - 手动 / 自动 live sync 协调器
+- `Empty/Services/ServerSyncConflictResolver.swift`
+  - 双向同步的重叠变更识别、`keepLocal` / `keepRemote` 冲突策略
 - `Empty/Services/SyncMutationJournal.swift`
   - 本地 baseline journal、delta/tombstone diff、per-server journal store
 - `Empty/Services/ServerAutoSyncState.swift`
@@ -280,7 +283,7 @@ HTTP 端点预留为：
 - `Empty/Services/SyncUsageSummary.swift`
   - 把同步状态折叠成用户更容易理解的 plain-language 总结
 - `Empty/Views/SyncSettingsView.swift`
-  - 同步与备份 UI + provider 状态探测 + Passkey 账号入口 + 重试 / 后台计划可见性 + 高级手动控件
+  - 同步与备份 UI + provider 状态探测 + 冲突策略控件 + Passkey 账号入口 + 重试 / 后台计划可见性 + 高级手动控件
 
 ### 修改
 
@@ -299,9 +302,9 @@ HTTP 端点预留为：
 
 ### Empty Cloud / 自建 server **完整后台 live sync**
 
-原因：虽然 cursor / delta / pull-push 契约、手动协调器、本地 mutation journal、自动调度、本地重试队列、系统后台唤醒壳层与 Passkey 客户端壳层都已经在客户端成型，但还没有：
+原因：虽然 cursor / delta / pull-push 契约、手动协调器、本地 mutation journal、自动调度、本地重试队列、系统后台唤醒壳层、基础冲突策略与 Passkey 客户端壳层都已经在客户端成型，但还没有：
 - 真正持久化的后台队列
-- 真实冲突合并策略 UI
+- 逐条 diff 审阅式冲突 UI
 - 服务端 device/session 管理与 key envelope
 
 所以本阶段已经实现：
@@ -311,10 +314,12 @@ HTTP 端点预留为：
 - `local mutation journal`
 - `retry queue`
 - `background scheduling shell`
+- `base conflict policy`
 - `manual/automatic live sync coordinator`
 - `passkey account shell`
 
 还**没有**把 server 提升成“持久后台、账号化”的完整 live sync mode。
+
 
 ### Passkey / 账号体系（部分实现）
 
@@ -343,7 +348,7 @@ HTTP 端点预留为：
 
 - `ServerSyncProvider`
 - 后台 pull / push 调度
-- 冲突合并与设备 tombstone
+- 逐条冲突审阅与设备 tombstone
 - 对象存储放快照与 blob
 
 ### Phase 3 — 更完整 Passkey + Wallet

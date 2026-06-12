@@ -118,12 +118,15 @@ nonisolated struct SyncSettings: Codable, Equatable, Sendable {
         var lastLivePushAt: Date? = nil
         var autoSyncEnabled: Bool = false
         var autoSyncIntervalSeconds: Int = 120
+        var conflictPolicy: ServerSyncConflictPolicy = .keepLocal
+        var lastConflictResolvedAt: Date? = nil
+        var lastConflictCount: Int = 0
+        var lastConflictPolicy: ServerSyncConflictPolicy? = nil
         var lastAutoSyncAt: Date? = nil
         var lastAutoSyncFingerprint: String? = nil
         var consecutiveAutoSyncFailures: Int = 0
         var nextAutoRetryAt: Date? = nil
         var lastAutoSyncError: String? = nil
-
         var displayName: String {
             guard let url = URL(string: baseURLString), let host = url.host(), !host.isEmpty else {
                 return baseURLString

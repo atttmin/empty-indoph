@@ -29,6 +29,7 @@ nonisolated struct ServerSyncPushSummary: Equatable, Sendable {
 nonisolated struct ServerSyncRoundTripSummary: Equatable, Sendable {
     var pull: ServerSyncPullSummary
     var push: ServerSyncPushSummary
+    var conflict: ServerSyncConflictSummary?
 }
 
 @MainActor

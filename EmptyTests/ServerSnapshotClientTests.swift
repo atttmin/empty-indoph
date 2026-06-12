@@ -37,6 +37,10 @@ struct ServerSnapshotClientTests {
                 lastLivePushAt: Date(timeIntervalSince1970: 40),
                 autoSyncEnabled: true,
                 autoSyncIntervalSeconds: 180,
+                conflictPolicy: .keepRemote,
+                lastConflictResolvedAt: Date(timeIntervalSince1970: 45),
+                lastConflictCount: 3,
+                lastConflictPolicy: .keepRemote,
                 lastAutoSyncAt: Date(timeIntervalSince1970: 50),
                 lastAutoSyncFingerprint: "abcdef1234567890",
                 consecutiveAutoSyncFailures: 2,
@@ -61,6 +65,10 @@ struct ServerSnapshotClientTests {
         #expect(loaded.serverTarget?.lastLivePushAt == Date(timeIntervalSince1970: 40))
         #expect(loaded.serverTarget?.autoSyncEnabled == true)
         #expect(loaded.serverTarget?.clampedAutoSyncIntervalSeconds == 180)
+        #expect(loaded.serverTarget?.conflictPolicy == .keepRemote)
+        #expect(loaded.serverTarget?.lastConflictResolvedAt == Date(timeIntervalSince1970: 45))
+        #expect(loaded.serverTarget?.lastConflictCount == 3)
+        #expect(loaded.serverTarget?.lastConflictPolicy == .keepRemote)
         #expect(loaded.serverTarget?.lastAutoSyncAt == Date(timeIntervalSince1970: 50))
         #expect(loaded.serverTarget?.shortFingerprint == "abcdef123456")
         #expect(loaded.serverTarget?.consecutiveAutoSyncFailures == 2)

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Empty Cloud / 自建 server 现在带上了 Passkey 账号壳层：客户端可探测 `empty-passkey-auth-v1`，执行创建 / 登录 / 刷新 / 退出账号，会话 token 只留在 Keychain，设置页也新增了更接近日常心智的账号入口。
 - 自动同步现在会把“后台唤醒壳层”也接上：iOS 通过 `BGAppRefreshTask`、macOS 通过 `NSBackgroundActivityScheduler` 继续申请一次系统调度；设置页会直接展示后台计划时间，便于你判断“放后台后还会不会再试一次”。
+- 双向同步现在带上基础冲突策略：同一条高亮 / 书签 / 记忆如果本机和云端都改过，可在设置里选“本机优先”或“云端优先”，最近一次冲突按哪种策略处理也会直接显示出来。
 ### Fixed
 
 - EPUB images in the paginated reader sometimes rendered blank: WebKit

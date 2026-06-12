@@ -488,7 +488,7 @@ struct SyncSettingsView: View {
                                     Text("打开自动同步")
                                         .font(.system(size: 12, weight: .bold))
                                         .foregroundStyle(palette.ink)
-                                    Text("应用在前台时，会定时拉取；如果本地有变化，再自动推送。")
+                                    Text("前台会定时拉取；切到后台后，系统也会尽量再补一次。如果本地有变化，再自动推送。")
                                         .font(.system(size: 10.5))
                                         .foregroundStyle(palette.ink3)
                                 }
@@ -503,6 +503,37 @@ struct SyncSettingsView: View {
                                     .font(.system(size: 11.5))
                                     .foregroundStyle(palette.ink2)
                             }
+
+                            if let target = appSession.syncSettings.serverTarget {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("冲突处理")
+                                        .font(.system(size: 11.5, weight: .bold))
+                                        .foregroundStyle(palette.ink)
+                                    Picker(
+                                        "冲突处理",
+                                        selection: Binding(
+                                            get: { target.conflictPolicy },
+                                            set: { appSession.setServerConflictPolicy($0) }
+                                        )
+                                    ) {
+                                        ForEach(ServerSyncConflictPolicy.allCases, id: \.self) { policy in
+                                            Text(policy.shortLabel).tag(policy)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                    Text(target.conflictPolicy.detail)
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(palette.ink3)
+                                    if let resolvedAt = target.lastConflictResolvedAt,
+                                       let policy = target.lastConflictPolicy,
+                                       target.lastConflictCount > 0 {
+                                        Text("最近冲突 · \(target.lastConflictCount) 处，按\(policy.shortLabel)处理 · \(resolvedAt.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(palette.ink3)
+                                    }
+                                }
+                            }
+
                             let pendingChanges = appSession.autoSyncRuntime.pendingChangeCount
                             Text(
                                 pendingChanges == 0
@@ -933,7 +964,8 @@ struct SyncSettingsView: View {
         runBusyTask {
             try refreshCurrentServerTarget()
             let summary = try await appSession.performServerLiveSync()
-            return "双向同步完成：pull \(summary.pull.appliedRecordCount) / push \(summary.push.changeCount)。"
+            let conflictSuffix = summary.conflict.map { "；\($0.conflictCount) 处冲突按\($0.policy.shortLabel)处理" } ?? ""
+            return "双向同步完成：pull \(summary.pull.appliedRecordCount) / push \(summary.push.changeCount)\(conflictSuffix)。"
         }
     }
 
