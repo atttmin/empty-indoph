@@ -45,13 +45,16 @@
 
 App 启动经 `AppSession` 读取 `SyncSettings`，再调用 `AppStores.makeContainer(syncMode:ephemeral:)` 构造容器。若选择 `cloudKit` 但容器初始化失败（本机未登录 iCloud、关闭签名的测试环境等），会自动以 `cloudKitDatabase: .none` 重建同一组磁盘 store——应用照常工作，仅不同步。
 
-第三方云路径当前仍不直接接到 SwiftData live sync，而是通过 `SyncSnapshot` provider 壳层落成两条快照路：
-- `FolderBackupProvider` — Files / File Provider 文件夹
-- `ServerSnapshotClient` — 兼容 Empty snapshot API 的 HTTPS server（`GET /v1/health`、`PUT/GET /v1/reader-snapshots/{namespace}/latest`）
+第三方云路径当前分两层：
+- `FolderBackupProvider` — Files / File Provider 文件夹快照
+- `ServerSnapshotClient` — 兼容 Empty snapshot API 的 HTTPS server 快照（`GET /v1/health`、`PUT/GET /v1/reader-snapshots/{namespace}/latest`）
 
-同时，live sync 的 delta 契约已经在客户端成型：`ReaderLiveSyncDelta`、`LiveSyncCursor`、`LiveSyncTombstone`、`ReaderLiveSyncPullRequest/Response`、`ReaderLiveSyncPushRequest/Response`，对应 future server 端点：
-- `POST /v1/reader-live-sync/{namespace}/pull`
-- `POST /v1/reader-live-sync/{namespace}/push`
+在此之上，`ServerSyncCoordinator` 已能对 **contract-ready** server 手动跑 live 协调流程：
+- `pull`：`POST /v1/reader-live-sync/{namespace}/pull` → merge / tombstone apply
+- `push`：把当前 synced store 捕获成 **full-snapshot delta** 后 `POST /push`
+- `sync`：先 pull 再 push，并持久化最新 cursor
+
+这一步已经是真实可运行的双向手动同步，但仍**不是后台自动 sync**：还没有本地 mutation journal、调度器、冲突策略 UI 或 Passkey 账号层。
 
 ### Local Store（仅本机）
 

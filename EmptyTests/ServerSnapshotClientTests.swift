@@ -26,7 +26,10 @@ struct ServerSnapshotClientTests {
                 namespace: "reader-main",
                 authMode: .bearer,
                 lastSnapshotAt: Date(timeIntervalSince1970: 10),
-                lastValidatedAt: Date(timeIntervalSince1970: 20)
+                lastValidatedAt: Date(timeIntervalSince1970: 20),
+                liveCursor: LiveSyncCursor(opaqueValue: "cursor-9"),
+                lastLivePullAt: Date(timeIntervalSince1970: 30),
+                lastLivePushAt: Date(timeIntervalSince1970: 40)
             )
         )
         settings.save(defaults: defaults)
@@ -36,6 +39,9 @@ struct ServerSnapshotClientTests {
         #expect(loaded.serverTarget?.baseURLString == "https://sync.example.com")
         #expect(loaded.serverTarget?.namespace == "reader-main")
         #expect(loaded.serverTarget?.authMode == .bearer)
+        #expect(loaded.serverTarget?.liveCursor?.opaqueValue == "cursor-9")
+        #expect(loaded.serverTarget?.lastLivePullAt == Date(timeIntervalSince1970: 30))
+        #expect(loaded.serverTarget?.lastLivePushAt == Date(timeIntervalSince1970: 40))
     }
 
     @Test func syncSettingsLoadsLegacyV1Payload() throws {

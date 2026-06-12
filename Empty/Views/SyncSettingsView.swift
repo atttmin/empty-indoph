@@ -334,6 +334,21 @@ struct SyncSettingsView: View {
                                 .font(.system(size: 10.5))
                                 .foregroundStyle(palette.ink3)
                         }
+                        if let lastLivePullAt = target.lastLivePullAt {
+                            Text("上次增量拉取 · \(lastLivePullAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(palette.ink3)
+                        }
+                        if let lastLivePushAt = target.lastLivePushAt {
+                            Text("上次增量推送 · \(lastLivePushAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(palette.ink3)
+                        }
+                        if let shortCursor = target.shortCursor {
+                            Text("当前 cursor · \(shortCursor)")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(palette.ink3)
+                        }
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -350,6 +365,52 @@ struct SyncSettingsView: View {
                     actionButton(isBusy ? "恢复中…" : "恢复最新") { confirmServerRestore = true }
                         .disabled(isBusy)
                 }
+
+                if let status = currentServerLiveStatus {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Text("live 协调器")
+                                .font(.system(size: 12.5, weight: .bold))
+                                .foregroundStyle(palette.ink)
+                            Text(status.state.badgeTitle)
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(badgeForeground(for: status.state))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(badgeBackground(for: status.state), in: Capsule())
+                        }
+                        Text("当前 coordinator 会把 synced store 捕获成 full-snapshot delta，再走 pull / push 契约；在没有本地 mutation journal 前，删除靠 full snapshot 缺席来表达。")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(palette.ink2)
+                        if status.state == .contractReady {
+                            HStack(spacing: 8) {
+                                actionButton(isBusy ? "拉取中…" : "拉取增量") { pullFromLiveServer() }
+                                    .disabled(isBusy)
+                                actionButton(isBusy ? "推送中…" : "推送当前库") { pushToLiveServer() }
+                                    .disabled(isBusy)
+                                actionButton(isBusy ? "同步中…" : "双向同步") { syncLiveServer() }
+                                    .disabled(isBusy)
+                            }
+                            Button(role: .destructive) {
+                                appSession.resetServerLiveCursor()
+                                statusMessage = "已清空 live sync cursor；下一次可改走 full pull。"
+                            } label: {
+                                Text("重置 live cursor")
+                                    .font(.system(size: 11.5, weight: .bold))
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text("只有当 server 在 `/v1/health.features` 声明 `reader-live-sync-v1` 时，才会开放 pull / push / 双向同步。")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(palette.ink3)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .emptyCard(palette, radius: 12)
+                }
+
                 Button(role: .destructive) {
                     appSession.clearServerTarget()
                     serverToken = ""
@@ -360,7 +421,7 @@ struct SyncSettingsView: View {
                         .foregroundStyle(.red)
                 }
                 .buttonStyle(.plain)
-                Text("snapshot 协议固定为 `GET /v1/health` 与 `PUT/GET /v1/reader-snapshots/{namespace}/latest`。future live sync 协议则会额外使用 `POST /v1/reader-live-sync/{namespace}/pull|push`。")
+                Text("snapshot 协议固定为 `GET /v1/health` 与 `PUT/GET /v1/reader-snapshots/{namespace}/latest`。future live sync 协议会额外使用 `POST /v1/reader-live-sync/{namespace}/pull|push`；当前 coordinator 已可手动跑这两条路。")
                     .font(.system(size: 10.5))
                     .foregroundStyle(palette.ink3)
             }
@@ -465,6 +526,10 @@ struct SyncSettingsView: View {
         case .setupRequired, .snapshotOnly, .unavailable:
             palette.ink3
         }
+    }
+
+    private var currentServerLiveStatus: LiveSyncProviderStatus? {
+        appSession.liveSyncStatuses.first { $0.kind == .server }
     }
 
     private func applyLiveMode(_ mode: SyncLiveMode) {
@@ -579,6 +644,50 @@ struct SyncSettingsView: View {
         )
         loadServerDraft()
         return try appSession.makeServerSnapshotClient()
+    }
+
+    private func makeCurrentServerSyncCoordinator() throws -> ServerSyncCoordinator {
+        try appSession.saveServerTarget(
+            baseURLString: serverBaseURL,
+            namespace: serverNamespace,
+            authToken: serverToken
+        )
+        loadServerDraft()
+        return try appSession.makeServerSyncCoordinator()
+    }
+
+    private func pullFromLiveServer() {
+        runBusyTask {
+            let summary = try await makeCurrentServerSyncCoordinator().pull(
+                into: modelContext,
+                cursor: appSession.serverLiveCursor
+            )
+            appSession.markServerLivePullCompleted(cursor: summary.cursor, at: summary.pulledAt)
+            return "已拉取 \(summary.appliedRecordCount) 条记录，tombstone \(summary.tombstoneCount) 条。"
+        }
+    }
+
+    private func pushToLiveServer() {
+        runBusyTask {
+            let summary = try await makeCurrentServerSyncCoordinator().push(
+                from: modelContext,
+                baseCursor: appSession.serverLiveCursor
+            )
+            appSession.markServerLivePushCompleted(cursor: summary.cursor, at: summary.pushedAt)
+            return "已推送 \(summary.pushedRecordCount) 条记录。"
+        }
+    }
+
+    private func syncLiveServer() {
+        runBusyTask {
+            let summary = try await makeCurrentServerSyncCoordinator().sync(
+                into: modelContext,
+                cursor: appSession.serverLiveCursor
+            )
+            appSession.markServerLivePullCompleted(cursor: summary.pull.cursor, at: summary.pull.pulledAt)
+            appSession.markServerLivePushCompleted(cursor: summary.push.cursor ?? summary.pull.cursor, at: summary.push.pushedAt)
+            return "双向同步完成：pull \(summary.pull.appliedRecordCount) / push \(summary.push.pushedRecordCount)。"
+        }
     }
 
     private func runBusyTask(_ operation: @escaping @MainActor () async throws -> String) {

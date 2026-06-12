@@ -106,12 +106,20 @@ nonisolated struct SyncSettings: Codable, Equatable, Sendable {
         var authMode: ServerAuthMode
         var lastSnapshotAt: Date?
         var lastValidatedAt: Date?
+        var liveCursor: LiveSyncCursor? = nil
+        var lastLivePullAt: Date? = nil
+        var lastLivePushAt: Date? = nil
 
         var displayName: String {
             guard let url = URL(string: baseURLString), let host = url.host(), !host.isEmpty else {
                 return baseURLString
             }
             return host
+        }
+
+        var shortCursor: String? {
+            guard let opaqueValue = liveCursor?.opaqueValue, !opaqueValue.isEmpty else { return nil }
+            return String(opaqueValue.prefix(18))
         }
     }
 

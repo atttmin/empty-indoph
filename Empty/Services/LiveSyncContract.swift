@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SwiftData
 
 nonisolated enum LiveSyncFeature: String, Codable, CaseIterable, Sendable {
     case readerSnapshotsV1 = "reader-snapshots-v1"
@@ -57,6 +58,16 @@ nonisolated struct ReaderLiveSyncDelta: Codable, Equatable, Sendable {
     var memoryItems: [MemoryItemRecord] = []
     var tombstones: [LiveSyncTombstone] = []
 
+    var recordCount: Int {
+        books.count
+            + highlights.count
+            + sessions.count
+            + vocab.count
+            + studyCards.count
+            + bookmarks.count
+            + memoryItems.count
+    }
+
     static func bootstrap(from snapshot: SyncSnapshot) -> ReaderLiveSyncDelta {
         ReaderLiveSyncDelta(
             schemaVersion: snapshot.schemaVersion,
@@ -71,6 +82,60 @@ nonisolated struct ReaderLiveSyncDelta: Codable, Equatable, Sendable {
             memoryItems: snapshot.memoryItems,
             tombstones: []
         )
+    }
+
+    var asSnapshot: SyncSnapshot {
+        SyncSnapshot(
+            schemaVersion: schemaVersion,
+            exportedAt: emittedAt,
+            books: books,
+            highlights: highlights,
+            sessions: sessions,
+            vocab: vocab,
+            studyCards: studyCards,
+            bookmarks: bookmarks,
+            memoryItems: memoryItems
+        )
+    }
+
+    @MainActor
+    func merge(into modelContext: ModelContext) throws {
+        try asSnapshot.merge(into: modelContext)
+        try applyTombstones(into: modelContext)
+    }
+
+    @MainActor
+    func applyTombstones(into modelContext: ModelContext) throws {
+        guard !tombstones.isEmpty else { return }
+
+        let books = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<Book>()).map { ($0.id, $0) })
+        let highlights = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<Highlight>()).map { ($0.id, $0) })
+        let sessions = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<ReadingSession>()).map { ($0.id, $0) })
+        let vocab = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<VocabEntry>()).map { ($0.id, $0) })
+        let cards = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<StudyCardEntry>()).map { ($0.id, $0) })
+        let bookmarks = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<Bookmark>()).map { ($0.id, $0) })
+        let memoryItems = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<MemoryItem>()).map { ($0.id, $0) })
+
+        for tombstone in tombstones {
+            switch tombstone.kind {
+            case .book:
+                if let book = books[tombstone.recordID] { modelContext.delete(book) }
+            case .highlight:
+                if let highlight = highlights[tombstone.recordID] { modelContext.delete(highlight) }
+            case .readingSession:
+                if let session = sessions[tombstone.recordID] { modelContext.delete(session) }
+            case .vocabEntry:
+                if let entry = vocab[tombstone.recordID] { modelContext.delete(entry) }
+            case .studyCard:
+                if let card = cards[tombstone.recordID] { modelContext.delete(card) }
+            case .bookmark:
+                if let bookmark = bookmarks[tombstone.recordID] { modelContext.delete(bookmark) }
+            case .memoryItem:
+                if let item = memoryItems[tombstone.recordID] { modelContext.delete(item) }
+            }
+        }
+
+        try modelContext.save()
     }
 }
 

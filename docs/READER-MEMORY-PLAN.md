@@ -222,7 +222,7 @@ case saveMemory(title: String, body: String, tags: [String])
 
 ### Phase 1 — 本地 ReaderMemory（已实现）
 
-**状态**：`MemoryItem`、`ReaderMemory.syncFromReaderData()`、`recall_reader_memory`、`search_highlights`、`propose_memory`、旧问答压缩为 `theme`、`ThoughtLinkFinder` 记忆召回路、本地 `MemoryEmbedding` 持久语义路均已落地；伴读主题提炼已有自动 + 手动入口。同步壳层已升级为 **local / iCloud live sync + folder/server snapshot backup + live delta contract shell**，后续主要剩账号与真正的 server coordinator。
+**状态**：`MemoryItem`、`ReaderMemory.syncFromReaderData()`、`recall_reader_memory`、`search_highlights`、`propose_memory`、旧问答压缩为 `theme`、`ThoughtLinkFinder` 记忆召回路、本地 `MemoryEmbedding` 持久语义路均已落地；伴读主题提炼已有自动 + 手动入口。同步壳层已升级为 **local / iCloud live sync + folder/server snapshot backup + manual live delta coordinator**，后续主要剩账号与自动后台 server sync。
 
 | 任务 ID | 内容 | 验收 |
 |---------|------|------|
@@ -261,7 +261,8 @@ case saveMemory(title: String, body: String, tags: [String])
 | P3-1 | Synced Store 支持 local / CloudKit live provider | 已实现：`SyncLiveMode` + `AppSession` 驱动容器切换 |
 | P3-2 | 文件夹 / HTTPS server 快照备份壳层（第三方云第一阶段） | 已实现：`SyncSnapshot` + `FolderBackupProvider` + `ServerSnapshotClient` + `SyncSettingsView` |
 | P3-3 | live sync 协议层与 provider 状态探测 | 已实现：`ReaderLiveSyncDelta`、pull/push 契约、`CloudKitLiveSyncProvider`、`ServerLiveSyncProvider` |
-| P3-4 | Passkey 或 Sign in with Apple 作为「记忆容器」账号 | 未实现：待自建 relay / Empty Cloud 契约 |
+| P3-4 | 手动 live sync 协调器与 cursor 持久化 | 已实现：`ServerSyncCoordinator`、server cursor / pull / push 时间持久化、设置页手动 pull / push / sync |
+| P3-5 | Passkey 或 Sign in with Apple 作为「记忆容器」账号 | 未实现：待自建 relay / Empty Cloud 契约 |
 
 ### Phase 3+ — Walrus Memory 可选便携层（见 §7.5，非默认）
 
@@ -374,7 +375,8 @@ Phase 1–2（现在）     → 自研 ReaderMemory（本方案主路径）
 Phase 2 云端 Claude   → 可选：Claude Memory Tool handler 读写 MemoryItem
 Phase 3 跨设备        → synced store 走 local / CloudKit；folder/server 走 snapshot backup
 Phase 3.1 live 协议    → `ReaderLiveSyncDelta` + cursor/tombstone + provider status probe
-Phase 4 账号壳        → Passkey 作账号层；server 才进入真正 delta sync
+Phase 3.2 手动 sync    → `ServerSyncCoordinator` 手动 pull / push / 双向同步
+Phase 4 账号壳        → Passkey 作账号层；server 才进入自动后台 delta sync
 实验性/不作为主路径   → Walrus 只做派生摘要便携副本；默认关闭
 ```
 

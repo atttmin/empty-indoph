@@ -94,7 +94,7 @@ HTTP 端点预留为：
 - `POST /v1/reader-live-sync/{namespace}/pull`
 - `POST /v1/reader-live-sync/{namespace}/push`
 
-这一步只定义 / 测试协议与状态探测；**不**代表 Empty Cloud live sync 已真正可用。
+这一步先定义 / 测试协议与状态探测；随后已在客户端补上一层**手动 live 协调器**，但仍不代表 Empty Cloud 已具备自动后台 live sync。
 ### 3. 身份 provider（后续）
 
 - `anonymousDevice`
@@ -173,10 +173,10 @@ HTTP 端点预留为：
 - OneDrive
 - Google Drive
 - SMB / NAS
-- 本地 On My iPhone / On My Mac
-
-首发语义：
-
+- 这仍是 **snapshot backup / restore**，不是 live sync mode
+- token 留空 = 无鉴权 server
+- token 非空 = `Authorization: Bearer …`
+- 当 `/v1/health.features` 包含 `reader-live-sync-v1` 时，设置页会把 server 标成“契约就绪”，并开放手动 pull / push / sync；但还不会把 server 提升成自动后台 live mode
 - 备份文件名固定：`empty-reader-backup.json`
 - “恢复”是 **merge/upsert**，不删除本地缺失项
 - 冲突策略：**用户主动恢复的快照优先**
@@ -216,6 +216,22 @@ HTTP 端点预留为：
 | `POST` | `/v1/reader-live-sync/{namespace}/pull` | 请求体：`ReaderLiveSyncPullRequest`；响应：`ReaderLiveSyncPullResponse` |
 | `POST` | `/v1/reader-live-sync/{namespace}/push` | 请求体：`ReaderLiveSyncPushRequest`；响应：`ReaderLiveSyncPushResponse` |
 
+### F. 手动 live sync 协调器（已实现）
+
+入口：`SyncSettingsView`
+
+- 拉取增量
+- 推送当前库（full-snapshot delta）
+- 双向同步（先 pull 再 push）
+- 重置 live cursor
+
+当前语义：
+
+- 本地没有 mutation journal，因此 `push` 总是发送 **full-snapshot delta**
+- 删除依赖“当前 full snapshot 中缺席”来表达
+- `pull` 会先 merge record，再应用 tombstone 删除
+- cursor、上次 pull 时间、上次 push 时间持久化在 `SyncSettings.serverTarget`
+
 ---
 
 ## 本阶段落地文件
@@ -243,9 +259,11 @@ HTTP 端点预留为：
 - `Empty/Services/ServerLiveSyncProvider.swift`
   - server live feature 探测
 - `Empty/Services/ServerLiveSyncClient.swift`
-  - future live sync pull / push client
+  - future / manual live sync pull / push client
+- `Empty/Services/ServerSyncCoordinator.swift`
+  - 手动 pull / push / 双向同步协调器
 - `Empty/Views/SyncSettingsView.swift`
-  - 同步与备份 UI + provider 状态探测
+  - 同步与备份 UI + provider 状态探测 + 手动 live sync 控件
 
 ### 修改
 
@@ -262,16 +280,21 @@ HTTP 端点预留为：
 
 ## 本阶段不做的事
 
-### Empty Cloud / 自建 server **live sync coordinator**
+### Empty Cloud / 自建 server **自动后台 live sync**
 
-原因：虽然 cursor / delta / pull-push 契约已经在客户端成型，但还没有真正的服务端 cursor、冲突合并与设备 tombstone 语义。
+原因：虽然 cursor / delta / pull-push 契约和手动协调器已经在客户端成型，但还没有：
+- 本地 mutation journal
+- 后台调度 / 重试
+- 真实冲突合并策略 UI
+- Passkey 账号与设备授权
 
-所以本阶段只落：
+所以本阶段已经实现：
 - `server snapshot client`
 - `live sync contract`
 - `provider status probe`
+- `manual live sync coordinator`
 
-还**没有**把 server 提升成可切换的 live sync mode。
+还**没有**把 server 提升成自动后台 live sync mode。
 
 ### Passkey / 账号体系
 
@@ -289,11 +312,12 @@ HTTP 端点预留为：
 
 ## 后续阶段
 
-### Phase 2 — Empty Cloud / Custom Server live sync coordinator
+### Phase 2 — Empty Cloud / Custom Server 自动后台 live sync
 
 - `ServerSyncProvider`
 - Passkey 登录
-- 把 `ReaderLiveSyncDelta` 接入真正的 pull / push 循环
+- 本地 mutation journal
+- 后台 pull / push 调度与重试
 - 冲突合并与设备 tombstone
 - 对象存储放快照与 blob
 
@@ -323,5 +347,6 @@ HTTP 端点预留为：
 3. 用户能配置兼容 Empty snapshot API 的 HTTPS server，并测试连接。
 4. 设置页能探测 iCloud / Empty Cloud live sync provider 状态。
 5. 客户端已具备 future live sync 的 delta / cursor / tombstone / pull-push 契约。
-6. 快照恢复不会引入正文 / chunk / embedding。
-7. 现有单测与平台构建继续通过。
+6. contract-ready server 已可手动执行 pull / push / 双向同步，并持久化 cursor。
+7. 快照恢复不会引入正文 / chunk / embedding。
+8. 现有单测与平台构建继续通过。

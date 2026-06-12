@@ -53,6 +53,10 @@ final class AppSession: ObservableObject {
         ) ?? ""
     }
 
+    var serverLiveCursor: LiveSyncCursor? {
+        syncSettings.serverTarget?.liveCursor
+    }
+
     func refreshLiveSyncStatuses() async {
         isRefreshingLiveSyncStatuses = true
         defer { isRefreshingLiveSyncStatuses = false }
@@ -141,7 +145,10 @@ final class AppSession: ObservableObject {
             namespace: normalizedNamespace,
             authMode: authMode,
             lastSnapshotAt: previous?.lastSnapshotAt,
-            lastValidatedAt: previous?.lastValidatedAt
+            lastValidatedAt: previous?.lastValidatedAt,
+            liveCursor: previous?.liveCursor,
+            lastLivePullAt: previous?.lastLivePullAt,
+            lastLivePushAt: previous?.lastLivePushAt
         )
         persist(updated)
         refreshLiveSyncStatusesSoon()
@@ -175,6 +182,32 @@ final class AppSession: ObservableObject {
         persist(updated)
     }
 
+    func markServerLivePullCompleted(cursor: LiveSyncCursor?, at date: Date = Date()) {
+        guard var target = syncSettings.serverTarget else { return }
+        target.liveCursor = cursor
+        target.lastLivePullAt = date
+        var updated = syncSettings
+        updated.serverTarget = target
+        persist(updated)
+    }
+
+    func markServerLivePushCompleted(cursor: LiveSyncCursor?, at date: Date = Date()) {
+        guard var target = syncSettings.serverTarget else { return }
+        target.liveCursor = cursor ?? target.liveCursor
+        target.lastLivePushAt = date
+        var updated = syncSettings
+        updated.serverTarget = target
+        persist(updated)
+    }
+
+    func resetServerLiveCursor() {
+        guard var target = syncSettings.serverTarget else { return }
+        target.liveCursor = nil
+        var updated = syncSettings
+        updated.serverTarget = target
+        persist(updated)
+    }
+
     func makeServerSnapshotClient() throws -> ServerSnapshotClient {
         guard let target = syncSettings.serverTarget else {
             throw ServerSnapshotClientError.providerError("先保存一个 Empty Cloud / 自建 Server 目标。")
@@ -201,6 +234,10 @@ final class AppSession: ObservableObject {
                 bearerToken: serverAuthToken
             )
         )
+    }
+
+    func makeServerSyncCoordinator() throws -> ServerSyncCoordinator {
+        try ServerSyncCoordinator(client: makeServerLiveSyncClient())
     }
 
     private func makeLiveSyncProviders() -> [any LiveSyncProvider] {

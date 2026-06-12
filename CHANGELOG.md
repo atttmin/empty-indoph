@@ -208,6 +208,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /v1/reader-live-sync/{namespace}/pull|push`; the settings panel now
   surfaces whether a saved server only supports snapshots or already
   advertises `reader-live-sync-v1`.
+- Added `ServerSyncCoordinator` on top of that contract: contract-ready
+  servers can now persist a cursor and manually run live `pull`, `push`
+  (current synced store as a full-snapshot delta), and `sync` (pull then
+  push) from `SyncSettingsView`.
 ### Added (earlier rounds)
 
 - iOS 随身伴读 aligned with the 02 iOS prototype:
