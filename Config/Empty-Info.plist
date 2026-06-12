@@ -16,5 +16,9 @@
 			</array>
 		</dict>
 	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>davirian.Empty.server-sync</string>
+	</array>
 </dict>
 </plist>

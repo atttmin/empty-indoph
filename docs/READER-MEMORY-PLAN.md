@@ -222,7 +222,7 @@ case saveMemory(title: String, body: String, tags: [String])
 
 ### Phase 1 — 本地 ReaderMemory（已实现）
 
-**状态**：`MemoryItem`、`ReaderMemory.syncFromReaderData()`、`recall_reader_memory`、`search_highlights`、`propose_memory`、旧问答压缩为 `theme`、`ThoughtLinkFinder` 记忆召回路、本地 `MemoryEmbedding` 持久语义路均已落地；伴读主题提炼已有自动 + 手动入口。同步壳层已升级为 **local / iCloud live sync + folder/server snapshot backup + foreground auto sync + local mutation journal + queued retry + passkey account shell**，后续主要剩更完整后台 sync 与便携导出层。
+**状态**：`MemoryItem`、`ReaderMemory.syncFromReaderData()`、`recall_reader_memory`、`search_highlights`、`propose_memory`、旧问答压缩为 `theme`、`ThoughtLinkFinder` 记忆召回路、本地 `MemoryEmbedding` 持久语义路均已落地；伴读主题提炼已有自动 + 手动入口。同步壳层已升级为 **local / iCloud live sync + folder/server snapshot backup + auto sync + local mutation journal + queued retry + background scheduling shell + passkey account shell**，后续主要剩更完整后台 sync 与便携导出层。
 
 | 任务 ID | 内容 | 验收 |
 |---------|------|------|
@@ -262,7 +262,7 @@ case saveMemory(title: String, body: String, tags: [String])
 | P3-2 | 文件夹 / HTTPS server 快照备份壳层（第三方云第一阶段） | 已实现：`SyncSnapshot` + `FolderBackupProvider` + `ServerSnapshotClient` + `SyncSettingsView` |
 | P3-3 | live sync 协议层与 provider 状态探测 | 已实现：`ReaderLiveSyncDelta`、pull/push 契约、`CloudKitLiveSyncProvider`、`ServerLiveSyncProvider` |
 | P3-4 | 手动 live sync 协调器与 cursor 持久化 | 已实现：`ServerSyncCoordinator`、server cursor / pull / push 时间持久化、设置页手动 pull / push / sync |
-| P3-5 | 更简单的前台自动同步壳层 | 已实现：本地 `SyncMutationJournal`、前台自动 pull + 增量 / tombstone push、失败后自动排队重试、自动同步开关 / 间隔、待同步变化提示、简化设置引导 |
+| P3-5 | 更简单的自动同步壳层 | 已实现：本地 `SyncMutationJournal`、前台自动 pull + 增量 / tombstone push、失败后自动排队重试、iOS/macOS 系统后台唤醒调度壳层、自动同步开关 / 间隔、待同步变化提示、简化设置引导 |
 | P3-6 | Passkey 或 Sign in with Apple 作为「记忆容器」账号 | 已实现基础壳层：兼容 server 可创建 / 登录 / 刷新 / 退出 Passkey 账号，会话 token 仅入 Keychain；服务端 challenge / device/session 管理仍待实现 |
 
 ### Phase 3+ — Walrus Memory 可选便携层（见 §7.5，非默认）

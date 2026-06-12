@@ -26,7 +26,8 @@ nonisolated enum SyncUsageSummaryBuilder {
         cloudStatus: LiveSyncProviderStatus?,
         serverStatus: LiveSyncProviderStatus?,
         pendingServerChanges: Int? = nil,
-        pendingServerRetryAt: Date? = nil
+        pendingServerRetryAt: Date? = nil,
+        backgroundScheduledAt: Date? = nil
     ) -> SyncUsageSummary {
         if let serverTarget {
             switch serverStatus?.state {
@@ -47,15 +48,21 @@ nonisolated enum SyncUsageSummaryBuilder {
                         )
                     }
                     let usingPasskey = serverTarget.authMode == .passkeySession
+                    let suffix: String
+                    if let backgroundScheduledAt {
+                        suffix = "切到后台后，系统也会尽量在 \(backgroundScheduledAt.formatted(date: .omitted, time: .shortened)) 左右补一次同步。"
+                    } else {
+                        suffix = "应用在前台时会定时拉取，内容变化时再推送。"
+                    }
                     let detail: String
                     if let pendingServerChanges, pendingServerChanges > 0 {
                         detail = usingPasskey
-                            ? "这套 server 已支持自动同步，账号也已经用 Passkey 接好。本机现在还有 \(pendingServerChanges) 处待同步变化；前台自动同步会继续拉取并推送。"
-                            : "这套 server 已支持自动同步。本机现在还有 \(pendingServerChanges) 处待同步变化；前台自动同步会继续拉取并推送。"
+                            ? "这套 server 已支持自动同步，账号也已经用 Passkey 接好。本机现在还有 \(pendingServerChanges) 处待同步变化；\(suffix)"
+                            : "这套 server 已支持自动同步。本机现在还有 \(pendingServerChanges) 处待同步变化；\(suffix)"
                     } else {
                         detail = usingPasskey
-                            ? "这套 server 已支持自动同步，账号也已经用 Passkey 接好。你正常阅读即可；应用在前台时会定时拉取，内容变化时再推送。"
-                            : "这套 server 已支持自动同步。你正常阅读即可；应用在前台时会定时拉取，内容变化时再推送。"
+                            ? "这套 server 已支持自动同步，账号也已经用 Passkey 接好。你正常阅读即可；\(suffix)"
+                            : "这套 server 已支持自动同步。你正常阅读即可；\(suffix)"
                     }
                     return SyncUsageSummary(
                         title: "自建同步已接好",

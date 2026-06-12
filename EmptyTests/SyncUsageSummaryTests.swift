@@ -9,6 +9,7 @@ import Testing
 
 struct SyncUsageSummaryTests {
     @Test func prefersContractReadyServerWithAutoSync() {
+        let scheduledAt = Date(timeIntervalSince1970: 600)
         let summary = SyncUsageSummaryBuilder.make(
             liveMode: .localOnly,
             folderTarget: nil,
@@ -32,11 +33,13 @@ struct SyncUsageSummaryTests {
                 title: "Empty Cloud",
                 state: .contractReady,
                 detail: "ready"
-            )
+            ),
+            backgroundScheduledAt: scheduledAt
         )
 
         #expect(summary.title == "自建同步已接好")
         #expect(summary.tone == .accent)
+        #expect(summary.detail.contains("后台"))
     }
     @Test func mentionsPasskeyWhenServerAccountConnected() {
         let summary = SyncUsageSummaryBuilder.make(

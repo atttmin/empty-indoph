@@ -33,6 +33,9 @@ struct EmptyApp: App {
                 .environmentObject(appSession)
         }
         .modelContainer(appSession.container)
+        .backgroundTask(.appRefresh(ServerBackgroundSyncPlanner.taskIdentifier)) {
+            await appSession.runScheduledBackgroundServerSync()
+        }
         .onChange(of: scenePhase, initial: true) { _, newPhase in
             appSession.handleScenePhase(newPhase)
         }

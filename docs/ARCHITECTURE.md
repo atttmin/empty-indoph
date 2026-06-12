@@ -48,16 +48,16 @@ App 启动经 `AppSession` 读取 `SyncSettings`，再调用 `AppStores.makeCont
 第三方云路径当前分四层：
 - `FolderBackupProvider` — Files / File Provider 文件夹快照
 - `ServerSnapshotClient` — 兼容 Empty snapshot API 的 HTTPS server 快照（`GET /v1/health`、`PUT/GET /v1/reader-snapshots/{namespace}/latest`）
-- `ServerSyncCoordinator` — 对 **contract-ready** server 执行前台 live 协调
+- `ServerSyncCoordinator` — 对 **contract-ready** server 执行 live 协调
 - `ServerPasskeyClient` + `PlatformPasskeyCoordinator` — 对兼容 server 执行 Passkey 账号创建 / 登录 / 刷新 / 退出，会话 token 只进 Keychain
 
-`ServerSyncCoordinator` + `SyncMutationJournal` 的当前语义：
+`ServerSyncCoordinator` + `SyncMutationJournal` + `ServerBackgroundSyncScheduler` 的当前语义：
 - `pull`：`POST /v1/reader-live-sync/{namespace}/pull` → merge / tombstone apply
 - `push`：根据本地 journal baseline 只发送变更过的 upsert / tombstone；首次或强制同步时才退回 full-snapshot delta
 - `sync`：先 pull、把 pulled state 记为新 baseline，再把本地未推送变更重新覆盖回去并 push
-- `auto sync`：应用在前台时按间隔自动 pull；若失败则按退避时间排队重试，若 journal 里还有本地变化再做增量 push
+- `auto sync`：前台有定时 loop；失败后按退避时间排队重试；切到后台后，客户端还会通过 iOS `BGAppRefreshTask` / macOS `NSBackgroundActivityScheduler` 继续申请一次系统唤醒
 
-这一步已经能让“自建 server 用户”基本照常使用，但仍**不是最终形态**：还没有真正后台调度、冲突策略 UI；Passkey 也仍依赖兼容 server 提供 session / challenge / verify 契约。
+这一步已经能让“自建 server 用户”基本照常使用，但仍**不是最终形态**：还没有真正持久队列、完整冲突策略 UI；Passkey 也仍依赖兼容 server 提供 session / challenge / verify 契约。
 
 ### Local Store（仅本机）
 

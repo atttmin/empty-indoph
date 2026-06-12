@@ -224,7 +224,7 @@ HTTP 端点预留为：
 - 推送当前待同步变更
 - 双向同步（先 pull 再 push）
 - 重置 live cursor
-- 打开前台自动同步
+- 打开自动同步
 
 当前语义：
 
@@ -233,7 +233,7 @@ HTTP 端点预留为：
 - 删除通过 journal diff 生成 `LiveSyncTombstone`
 - `pull` 会先 merge record，再应用 tombstone 删除
 - cursor、上次 pull 时间、上次 push 时间、上次 baseline 指纹持久化在 `SyncSettings.serverTarget`
-- 自动同步只在**前台**运行：定时 pull；若失败则按退避时间排队重试，若 journal 仍有本地变化，再做增量 push
+- 自动同步在前台有定时 loop；若失败则按退避时间排队重试；切到后台后，客户端还会继续申请一次系统唤醒，再补一次 pull / push
 
 ---
 
@@ -244,7 +244,7 @@ HTTP 端点预留为：
 - `Empty/Services/SyncSettings.swift`
   - 存储 live sync provider、folder target、server target
 - `Empty/Services/AppSession.swift`
-  - App 级状态：`ModelContainer`、sync settings、切换 provider、folder/server target 持久化、provider 状态探测、前台自动 sync 调度、Passkey 会话持久化
+  - App 级状态：`ModelContainer`、sync settings、切换 provider、folder/server target 持久化、provider 状态探测、前台 auto sync、后台调度壳层、Passkey 会话持久化
 - `Empty/Services/SyncSnapshot.swift`
   - provider-neutral snapshot schema、capture / merge、stable fingerprint
 - `Empty/Services/SyncBackupProvider.swift`
@@ -266,19 +266,21 @@ HTTP 端点预留为：
 - `Empty/Services/ServerLiveSyncProvider.swift`
   - server live feature / passkey feature 探测
 - `Empty/Services/ServerLiveSyncClient.swift`
-  - future / manual live sync pull / push client
+  - manual / future live sync pull / push client
 - `Empty/Services/ServerSyncCoordinator.swift`
-  - 手动 pull / push / 双向同步协调器
+  - 手动 / 自动 live sync 协调器
 - `Empty/Services/SyncMutationJournal.swift`
   - 本地 baseline journal、delta/tombstone diff、per-server journal store
 - `Empty/Services/ServerAutoSyncState.swift`
-  - 前台自动同步 runtime 状态（含待同步变化计数、失败次数、下次重试时间）
+  - 自动同步 runtime 状态（含待同步变化计数、失败次数、下次重试时间、后台计划时间）
 - `Empty/Services/ServerSyncRetryPolicy.swift`
-  - 前台自动同步的本地退避重试策略
+  - 自动同步的本地退避重试策略
+- `Empty/Services/ServerBackgroundSyncScheduler.swift`
+  - iOS `BGAppRefreshTask` / macOS `NSBackgroundActivityScheduler` 壳层
 - `Empty/Services/SyncUsageSummary.swift`
   - 把同步状态折叠成用户更容易理解的 plain-language 总结
 - `Empty/Views/SyncSettingsView.swift`
-  - 同步与备份 UI + provider 状态探测 + Passkey 账号入口 + 简化引导 + 重试可见性 + 高级手动控件
+  - 同步与备份 UI + provider 状态探测 + Passkey 账号入口 + 重试 / 后台计划可见性 + 高级手动控件
 
 ### 修改
 
@@ -297,8 +299,8 @@ HTTP 端点预留为：
 
 ### Empty Cloud / 自建 server **完整后台 live sync**
 
-原因：虽然 cursor / delta / pull-push 契约、手动协调器、本地 mutation journal、前台自动调度、本地重试队列与 Passkey 客户端壳层都已经在客户端成型，但还没有：
-- 真后台调度
+原因：虽然 cursor / delta / pull-push 契约、手动协调器、本地 mutation journal、自动调度、本地重试队列、系统后台唤醒壳层与 Passkey 客户端壳层都已经在客户端成型，但还没有：
+- 真正持久化的后台队列
 - 真实冲突合并策略 UI
 - 服务端 device/session 管理与 key envelope
 
@@ -307,12 +309,12 @@ HTTP 端点预留为：
 - `live sync contract`
 - `provider status probe`
 - `local mutation journal`
-- `foreground retry queue`
-- `manual live sync coordinator`
-- `foreground auto sync shell`
+- `retry queue`
+- `background scheduling shell`
+- `manual/automatic live sync coordinator`
 - `passkey account shell`
 
-还**没有**把 server 提升成“后台、账号化”的完整 live sync mode。
+还**没有**把 server 提升成“持久后台、账号化”的完整 live sync mode。
 
 ### Passkey / 账号体系（部分实现）
 

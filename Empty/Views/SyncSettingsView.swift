@@ -390,6 +390,10 @@ struct SyncSettingsView: View {
                             Text("已安排重试 · \(nextRetryAt.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.system(size: 10.5))
                                 .foregroundStyle(.red)
+                        } else if let backgroundScheduledAt = appSession.autoSyncRuntime.backgroundScheduledAt {
+                            Text("后台唤醒已安排 · \(backgroundScheduledAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(palette.ink3)
                         } else if let lastAutoSyncAt = target.lastAutoSyncAt {
                             Text("最近自动同步 · \(lastAutoSyncAt.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.system(size: 10.5))
@@ -467,7 +471,11 @@ struct SyncSettingsView: View {
                                 .padding(.vertical, 3)
                                 .background(badgeBackground(for: status.state), in: Capsule())
                         }
-                        Text(simpleServerStatusMessage(for: status, retryAt: appSession.autoSyncRuntime.nextRetryAt))
+                        Text(simpleServerStatusMessage(
+                            for: status,
+                            retryAt: appSession.autoSyncRuntime.nextRetryAt,
+                            backgroundScheduledAt: appSession.autoSyncRuntime.backgroundScheduledAt
+                        ))
                             .font(.system(size: 11.5))
                             .foregroundStyle(palette.ink2)
 
@@ -512,6 +520,10 @@ struct SyncSettingsView: View {
                                     Text("上次没有成功；会在 \(nextRetryAt.formatted(date: .omitted, time: .shortened)) 自动重试。")
                                         .font(.system(size: 10.5))
                                         .foregroundStyle(.red)
+                                } else if let backgroundScheduledAt = appSession.autoSyncRuntime.backgroundScheduledAt {
+                                    Text("后台唤醒已安排；系统会尽量在 \(backgroundScheduledAt.formatted(date: .omitted, time: .shortened)) 左右再补一次。")
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(palette.ink3)
                                 }
                                 if let lastError = appSession.autoSyncRuntime.lastError {
                                     Text("最近错误 · \(lastError)")
@@ -686,11 +698,18 @@ struct SyncSettingsView: View {
         }
     }
 
-    private func simpleServerStatusMessage(for status: LiveSyncProviderStatus, retryAt: Date?) -> String {
+    private func simpleServerStatusMessage(
+        for status: LiveSyncProviderStatus,
+        retryAt: Date?,
+        backgroundScheduledAt: Date?
+    ) -> String {
         switch status.state {
         case .contractReady:
             if let retryAt {
                 return "这台 server 已具备同步契约。最近一次自动同步没成功，会在 \(retryAt.formatted(date: .omitted, time: .shortened)) 自动重试。"
+            }
+            if let backgroundScheduledAt {
+                return "这台 server 已经具备同步契约。切到后台后，系统也会尽量在 \(backgroundScheduledAt.formatted(date: .omitted, time: .shortened)) 左右补一次同步。"
             }
             return "这台 server 已经具备同步契约。日常只要打开自动同步，后面基本不用再手动管。"
         case .snapshotOnly:

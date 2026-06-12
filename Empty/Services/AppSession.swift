@@ -24,6 +24,7 @@ final class AppSession: ObservableObject {
     private var currentScenePhase: ScenePhase = .active
     private var autoSyncTask: Task<Void, Never>?
     private let mutationJournalStore = SyncMutationJournalStore()
+    private let backgroundSyncScheduler = ServerBackgroundSyncScheduler()
 
     init(isEphemeral override: Bool? = nil) {
         let process = ProcessInfo.processInfo
@@ -39,6 +40,10 @@ final class AppSession: ObservableObject {
         } catch {
             fatalError("Failed to set up persistence: \(error)")
         }
+        backgroundSyncScheduler.installAction { [weak self] in
+            guard let self else { return }
+            await self.runScheduledBackgroundServerSync()
+        }
         refreshAutoSyncRuntime()
         Task { @MainActor in
             await refreshLiveSyncStatuses()
@@ -48,6 +53,7 @@ final class AppSession: ObservableObject {
     deinit {
         autoSyncTask?.cancel()
     }
+
 
     static var preview: AppSession {
         AppSession(isEphemeral: true)
@@ -101,7 +107,8 @@ final class AppSession: ObservableObject {
             cloudStatus: liveSyncStatuses.first { $0.kind == .cloudKit },
             serverStatus: liveSyncStatuses.first { $0.kind == .server },
             pendingServerChanges: autoSyncRuntime.pendingChangeCount,
-            pendingServerRetryAt: autoSyncRuntime.nextRetryAt
+            pendingServerRetryAt: autoSyncRuntime.nextRetryAt,
+            backgroundScheduledAt: autoSyncRuntime.backgroundScheduledAt
         )
     }
 
@@ -115,8 +122,19 @@ final class AppSession: ObservableObject {
                 } catch {
                     autoSyncRuntime.lastError = error.localizedDescription
                 }
+                refreshBackgroundSyncSchedule()
             }
         }
+    }
+
+    func runScheduledBackgroundServerSync() async {
+        guard currentScenePhase != .active else { return }
+        do {
+            _ = try await runAutomaticServerSync(force: false, trigger: "background-scheduler")
+        } catch {
+            autoSyncRuntime.lastError = error.localizedDescription
+        }
+        refreshBackgroundSyncSchedule()
     }
 
     func refreshLiveSyncStatuses() async {
@@ -684,6 +702,7 @@ final class AppSession: ObservableObject {
         autoSyncTask?.cancel()
         autoSyncTask = nil
         refreshAutoSyncRuntime()
+        refreshBackgroundSyncSchedule()
         guard shouldRunAutoSyncLoop else { return }
         autoSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -738,6 +757,26 @@ final class AppSession: ObservableObject {
         Task { @MainActor in
             await refreshLiveSyncStatuses()
         }
+    }
+
+    private func refreshBackgroundSyncSchedule(now: Date = Date()) {
+        guard let plan = ServerBackgroundSyncPlanner.makePlan(
+            isEphemeral: isEphemeral,
+            autoSyncEnabled: serverAutoSyncEnabled,
+            isContractReady: currentServerStatus?.state == .contractReady,
+            retryAt: syncSettings.serverTarget?.nextAutoRetryAt,
+            lastAutoSyncAt: syncSettings.serverTarget?.lastAutoSyncAt,
+            intervalSeconds: serverAutoSyncIntervalSeconds,
+            now: now
+        ) else {
+            autoSyncRuntime.backgroundScheduledAt = nil
+            autoSyncRuntime.backgroundTrigger = nil
+            backgroundSyncScheduler.cancel()
+            return
+        }
+        autoSyncRuntime.backgroundScheduledAt = plan.earliestBeginDate
+        autoSyncRuntime.backgroundTrigger = plan.trigger
+        backgroundSyncScheduler.schedule(plan)
     }
 
     private func serverSessionAccount(for target: SyncSettings.ServerBackupTarget) -> String {
@@ -847,6 +886,8 @@ final class AppSession: ObservableObject {
         var updated = syncSettings
         updated.serverTarget = target
         persist(updated)
+        refreshAutoSyncRuntime()
+        refreshBackgroundSyncSchedule(now: date)
     }
 
     private func markServerAutoSyncFailed(_ error: Error, at date: Date = Date()) {
@@ -863,6 +904,8 @@ final class AppSession: ObservableObject {
         var updated = syncSettings
         updated.serverTarget = target
         persist(updated)
+        refreshAutoSyncRuntime()
+        refreshBackgroundSyncSchedule(now: date)
     }
 
     private func updateServerAutoSyncFingerprint(using snapshot: SyncSnapshot) throws {
@@ -890,6 +933,8 @@ final class AppSession: ObservableObject {
         autoSyncRuntime.nextRetryAt = syncSettings.serverTarget?.nextAutoRetryAt
         if autoSyncRuntime.isEnabled == false {
             autoSyncRuntime.lastTrigger = nil
+            autoSyncRuntime.backgroundScheduledAt = nil
+            autoSyncRuntime.backgroundTrigger = nil
         }
         refreshServerPendingMutations()
     }
