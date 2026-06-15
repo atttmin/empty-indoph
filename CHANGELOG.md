@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - iOS 阅读器补上手机端导航闭环：顶部新增搜索与书签入口，目录 sheet 合并目录 / 书签 / 全文搜索，卡片页的高亮和带来源的学习卡可以直接跳回原文位置。
 - Paper Reading v2：分页模式顶部 chrome 进一步弱化（透明背景、单菜单入口），章首新增「章首饰线」小章题 + 分隔饰线与「首字下沉」效果，书库 / 阅读 / 卡片三端统一为暖纸色卡片节奏。
 - Paper Reading v3：分页模式页面卡片增加纸张纤维纹理、内边缘阴影与左侧页堆叠阴影，并叠加环境 + 接触两层阴影，让页面更具实体书的触感与厚度。
+- Paper Reading v4：分页模式页面卡片右侧增加微卷页边阴影，iOS 翻页触发轻触感反馈，macOS 翻页从淡入淡出改为带方向性的滑入滑出过渡，整体动势更贴近真实翻书。
 ### Fixed
 
 - EPUB images in the paginated reader sometimes rendered blank: WebKit

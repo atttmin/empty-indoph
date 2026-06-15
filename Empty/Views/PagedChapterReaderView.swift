@@ -806,6 +806,9 @@ struct PagedChapterReaderView: View {
         withAnimation(.easeInOut(duration: 0.18)) {
             pageIndex = target
         }
+        #if canImport(UIKit)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
     }
 
     private func composeKey(textSize: CGSize) -> ComposeKey {
@@ -1045,6 +1048,7 @@ struct MacPagedChapterReaderView: View {
     @AppStorage("reader.vertical.mac") private var verticalText = false
     @State private var paginated: PaginatedChapter?
     @State private var pageIndex = 0
+    @State private var pageTransitionEdge: Edge = .trailing
     @State private var composeVersion = 0
     @State private var lastComposeKey: ComposeKey?
     @FocusState private var pageFocused: Bool
@@ -1142,7 +1146,12 @@ struct MacPagedChapterReaderView: View {
                         .padding(.top, verticalInset)
                         .padding(.bottom, verticalInset + pageFooterHeight)
                         .id("\(paginated.version)-\(pageIndex)")
-                        .transition(.opacity)
+                        .transition(
+                            .asymmetric(
+                                insertion: .move(edge: pageTransitionEdge).combined(with: .opacity),
+                                removal: .move(edge: pageTransitionEdge == .trailing ? .leading : .trailing).combined(with: .opacity)
+                            )
+                        )
 
                         pageFooter(count: paginated.pageCount)
                             .padding(.horizontal, pageInset + 4)
@@ -1279,6 +1288,7 @@ struct MacPagedChapterReaderView: View {
             onChapterBoundary(.forward)
             return
         }
+        pageTransitionEdge = delta > 0 ? .trailing : .leading
         pageIndex = target
     }
 
@@ -1503,6 +1513,50 @@ private struct PaperPageBackground: View {
                 PaperInnerShadow(isDark: isDark)
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             )
+            .overlay(
+                PageEdgeCurl(isDark: isDark)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            )
+    }
+}
+
+/// Subtle trailing-edge curl shadow that suggests the page can be lifted and
+/// turned, reinforcing the physical paper metaphor without competing with text.
+private struct PageEdgeCurl: View {
+    let isDark: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            let edgeWidth = min(28, geometry.size.width * 0.08)
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0),
+                        Color.black.opacity(isDark ? 0.10 : 0.04),
+                        Color.black.opacity(isDark ? 0.18 : 0.07)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: edgeWidth)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(isDark ? 0.04 : 0.18),
+                                    Color.white.opacity(0)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: 1)
+                }
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
