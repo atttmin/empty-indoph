@@ -94,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `theme` memories before falling back to raw highlight matching.
 - Added a deterministic XCUITest smoke flow for seeded reader → highlights
   → export → copy, so the product loop has UI coverage beyond screenshots.
+- Reader-supplied AI companion instructions: discover `instructions.md`, `CLAUDE.md`, and `AGENTS.md` in `~/Empty/` (global) and each book's container (including a `.empty/` hidden directory), then prepend them to the companion's tool catalog and flashcard prompts. Managed from 阅读设置 → AI 指令 with a popover listing discovered files.
+- `BookFileStore.default` shared instance for convenient access to the default on-disk book store.
 
 - Added local `MemoryEmbedding` persistence plus a `MemoryIndexer` pass so
   confirmed ReaderMemory entries can reuse on-device semantic vectors

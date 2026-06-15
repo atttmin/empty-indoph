@@ -11,7 +11,7 @@
 import Foundation
 
 /// What one agent run produced for the conversation.
-nonisolated struct ReadingAgentReply: Sendable {
+nonisolated struct ReadingAgentReply {
     var text: String
     /// 朱批 trace fragments, in order ("查已读「…」", "生成闪卡(待确认)").
     var steps: [String]
@@ -39,20 +39,20 @@ struct ReadingAgent {
         var evidenceBlocks: [CompanionEvidenceBlock] = []
         var actions: [CompanionAction] = []
 
-        for stepIndex in 0..<maxSteps {
+        for stepIndex in 0 ..< maxSteps {
             let isLastStep = stepIndex == maxSteps - 1
             let prompt = isLastStep
                 ? transcript + "\n(工具预算已用完 — 现在必须 finish,直接回答读者。)"
                 : transcript
             let step = try await service.toolStep(
-                toolDocs: ReadingToolbox.toolDocs,
+                toolDocs: toolbox.toolDocs(),
                 transcript: prompt
             )
 
             switch step {
-            case .finish(let answer):
+            case let .finish(answer):
                 return ReadingAgentReply(text: answer, steps: steps, evidenceBlocks: evidenceBlocks, actions: actions)
-            case .call(let tool, let argument):
+            case let .call(tool, argument):
                 guard !isLastStep else {
                     // Model tried to keep digging past the budget — answer
                     // from what's on the table instead of looping.
@@ -80,7 +80,7 @@ struct ReadingAgent {
         // transcript so the reader still gets an answer.
         let answer = try await service.answer(
             question: question,
-            groundedIn: [GroundedPassage(id: 0, text: String(transcript.suffix(3_000)))]
+            groundedIn: [GroundedPassage(id: 0, text: String(transcript.suffix(3000)))]
         )
         return ReadingAgentReply(text: answer.text, steps: steps, evidenceBlocks: evidenceBlocks, actions: actions)
     }

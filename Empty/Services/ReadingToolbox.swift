@@ -13,8 +13,8 @@ import Foundation
 import SwiftData
 
 /// A write the agent proposed and the reader can confirm with one tap.
-nonisolated struct CompanionAction: Identifiable, Equatable, Sendable {
-    nonisolated enum Kind: Equatable, Sendable {
+nonisolated struct CompanionAction: Identifiable, Equatable {
+    nonisolated enum Kind: Equatable {
         /// Look the word up (AI gloss) and add it to the vocabulary book.
         case addVocab(word: String, sentence: String)
         /// Insert the drafted flashcards as spaced-repetition study cards.
@@ -31,13 +31,13 @@ nonisolated struct CompanionAction: Identifiable, Equatable, Sendable {
     var isDone = false
 
     init(title: String, kind: Kind) {
-        self.id = UUID()
+        id = UUID()
         self.title = title
         self.kind = kind
     }
 }
 
-nonisolated enum CompanionEvidenceKind: String, Equatable, Sendable {
+nonisolated enum CompanionEvidenceKind: String, Equatable {
     case passage
     case highlights
     case memory
@@ -54,12 +54,12 @@ nonisolated enum CompanionEvidenceKind: String, Equatable, Sendable {
     }
 }
 
-nonisolated enum CompanionEvidenceScope: String, Equatable, Sendable {
+nonisolated enum CompanionEvidenceScope: String, Equatable {
     case currentBook
     case crossBook
 }
 
-nonisolated struct CompanionEvidenceBlock: Identifiable, Equatable, Sendable {
+nonisolated struct CompanionEvidenceBlock: Identifiable, Equatable {
     let id: UUID
     var kind: CompanionEvidenceKind
     var title: String
@@ -74,7 +74,7 @@ nonisolated struct CompanionEvidenceBlock: Identifiable, Equatable, Sendable {
         scope: CompanionEvidenceScope = .currentBook,
         emphasisTerms: [String] = []
     ) {
-        self.id = UUID()
+        id = UUID()
         self.kind = kind
         self.title = title
         self.body = body
@@ -100,7 +100,7 @@ nonisolated struct ReadingToolResult {
 }
 
 /// One tool's catalog entry, rendered into the prompt.
-nonisolated struct ReadingToolSpec: Sendable {
+nonisolated struct ReadingToolSpec {
     var name: String
     var summary: String
     var argumentHint: String
@@ -113,6 +113,9 @@ struct ReadingToolbox {
     let position: ReadingPosition
     let modelContext: ModelContext
     let service: any AIService
+    /// Optional reader-written instruction files (global + per-book) that
+    /// customize the companion's voice and constraints for this book.
+    let instructions: [ReaderInstructionSource]
 
     static let specs: [ReadingToolSpec] = [
         ReadingToolSpec(
@@ -162,11 +165,13 @@ struct ReadingToolbox {
         ),
     ]
 
-    /// Prompt-ready tool catalog.
-    static var toolDocs: String {
-        specs
+    /// Prompt-ready tool catalog, optionally prefixed by reader instructions.
+    func toolDocs() -> String {
+        let appendix = instructions.map { $0.promptAppendix() }.joined(separator: "\n\n")
+        let base = Self.specs
             .map { "- \($0.name)(\($0.argumentHint)): \($0.summary)" }
             .joined(separator: "\n")
+        return appendix.isEmpty ? base : "\(appendix)\n\n\(base)"
     }
 
     func run(_ name: String, argument: String) async throws -> ReadingToolResult {
@@ -452,9 +457,13 @@ struct ReadingToolbox {
                 traceLabel: "生成闪卡"
             )
         }
-        var source = String(readText.suffix(4_000))
+        var source = String(readText.suffix(4000))
         if !topic.isEmpty {
             source = "Focus on: \(topic)\n\n" + source
+        }
+        if !instructions.isEmpty {
+            let appendix = instructions.map { $0.promptAppendix() }.joined(separator: "\n\n")
+            source = "\(appendix)\n\n" + source
         }
         let cards = try await service.flashcards(from: source, maxCount: 3)
         guard !cards.isEmpty else {
@@ -488,13 +497,13 @@ struct ReadingToolbox {
 
     private func contextualSentence(for word: String) throws -> String? {
         guard !word.isEmpty,
-              let excerpt = try recentReadText(maxCharacters: 1_200),
+              let excerpt = try recentReadText(maxCharacters: 1200),
               let range = excerpt.range(of: word, options: [.caseInsensitive, .diacriticInsensitive])
         else { return nil }
         let utf16 = Array(excerpt.utf16)
         let lower = max(0, range.lowerBound.utf16Offset(in: excerpt) - 70)
         let upper = min(utf16.count, range.upperBound.utf16Offset(in: excerpt) + 90)
-        let snippet = String(decoding: utf16[lower..<upper], as: UTF16.self)
+        let snippet = String(decoding: utf16[lower ..< upper], as: UTF16.self)
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return snippet.isEmpty ? nil : snippet
@@ -534,6 +543,7 @@ struct ReadingToolbox {
         }
         return "《\(book.title)》 · \(title) · ¶\(chunk.ordinal + 1)"
     }
+
     private func queryTerms(for query: String) -> [String] {
         let tokens = query
             .split {
@@ -561,14 +571,14 @@ struct ReadingToolbox {
     /// for the transcript bubble.
     func perform(_ action: CompanionAction) async throws -> String {
         switch action.kind {
-        case .addVocab(let word, let sentence):
+        case let .addVocab(word, sentence):
             let entry = try await VocabStore(modelContext: modelContext).lookupWithAI(
                 word: word,
                 sentence: sentence.isEmpty ? word : sentence,
                 source: book.title
             )
             return "已加入生词本:\(entry.word) — \(entry.meaning)"
-        case .saveFlashcards(let cards):
+        case let .saveFlashcards(cards):
             for card in cards {
                 let entry = StudyCardEntry(
                     question: card.question,
@@ -582,7 +592,7 @@ struct ReadingToolbox {
             }
             try modelContext.save()
             return "已保存 \(cards.count) 张闪卡,可在卡片/生词屏复习。"
-        case .saveMemory(let title, let body, let tags):
+        case let .saveMemory(title, body, tags):
             let item = MemoryItem(
                 kind: .theme,
                 title: title,

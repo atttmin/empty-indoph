@@ -7,10 +7,10 @@
 //  amnesia master switch, and the confirm-gated propose_memory write.
 //
 
+@testable import Empty
 import Foundation
 import SwiftData
 import Testing
-@testable import Empty
 
 @MainActor
 struct ReaderMemoryTests {
@@ -90,7 +90,8 @@ struct ReaderMemoryTests {
             book: book,
             position: ReadingPosition(chapterIndex: 1, utf16Offset: 0),
             modelContext: context,
-            service: NullAIService()
+            service: NullAIService(),
+            instructions: []
         )
 
         let result = try await toolbox.run(
@@ -100,7 +101,7 @@ struct ReaderMemoryTests {
         #expect(try context.fetch(FetchDescriptor<MemoryItem>()).isEmpty)
 
         // Reader confirms → the theme lands, pre-confirmed.
-        let outcome = try await toolbox.perform(result.proposedAction!)
+        let outcome = try await toolbox.perform(#require(result.proposedAction))
         #expect(outcome.contains("已记入"))
         let items = try context.fetch(FetchDescriptor<MemoryItem>())
         #expect(items.count == 1)
@@ -121,7 +122,8 @@ struct ReaderMemoryTests {
             book: book,
             position: ReadingPosition(chapterIndex: 1, utf16Offset: 0),
             modelContext: context,
-            service: NullAIService()
+            service: NullAIService(),
+            instructions: []
         )
 
         let hit = try await toolbox.run("recall_reader_memory", argument: "减法")
@@ -134,6 +136,7 @@ struct ReaderMemoryTests {
 
         _ = container
     }
+
     @Test func recallReaderMemoryStaysInCurrentBookWhenLocalMemoryExists() async throws {
         let (container, book) = try makeFixture()
         let context = container.mainContext
@@ -155,7 +158,8 @@ struct ReaderMemoryTests {
             book: book,
             position: ReadingPosition(chapterIndex: 1, utf16Offset: 0),
             modelContext: context,
-            service: NullAIService()
+            service: NullAIService(),
+            instructions: []
         )
 
         let result = try await toolbox.run("recall_reader_memory", argument: "减法 主题")
@@ -178,7 +182,8 @@ struct ReaderMemoryTests {
             book: book,
             position: ReadingPosition(chapterIndex: 1, utf16Offset: 0),
             modelContext: context,
-            service: NullAIService()
+            service: NullAIService(),
+            instructions: []
         )
 
         let result = try await toolbox.run("recall_reader_memory", argument: "重点")
@@ -213,7 +218,8 @@ struct ReaderMemoryTests {
             book: book,
             position: ReadingPosition(chapterIndex: 1, utf16Offset: 0),
             modelContext: context,
-            service: NullAIService()
+            service: NullAIService(),
+            instructions: []
         )
 
         let result = try await toolbox.run("search_highlights", argument: "重点")
@@ -224,7 +230,6 @@ struct ReaderMemoryTests {
         #expect(!result.observation.contains("Meditations"))
         #expect(result.evidenceBlocks.allSatisfy { $0.scope == .currentBook })
     }
-
 
     @Test func searchHighlightsStaysInCurrentBookWhenCurrentHitsExist() async throws {
         let (container, book) = try makeFixture()
@@ -247,7 +252,8 @@ struct ReaderMemoryTests {
             book: book,
             position: ReadingPosition(chapterIndex: 1, utf16Offset: 0),
             modelContext: context,
-            service: NullAIService()
+            service: NullAIService(),
+            instructions: []
         )
 
         let result = try await toolbox.run("search_highlights", argument: "重点")
@@ -256,7 +262,6 @@ struct ReaderMemoryTests {
         #expect(!result.observation.contains("《Meditations》"))
         #expect(result.evidenceBlocks.allSatisfy { $0.scope == .currentBook })
     }
-
 
     @Test func memoryIndexerPersistsEmbeddingsForConfirmedItems() throws {
         let (container, _) = try makeFixture()
@@ -288,7 +293,6 @@ struct ReaderMemoryTests {
         }
 
         _ = container
-
     }
 
     @Test func compressesOldQaIntoThemeAndSkipsQaRecall() throws {
@@ -338,7 +342,6 @@ struct ReaderMemoryTests {
         _ = container
     }
 
-
     @Test func recallUsesPersistedMemoryEmbeddings() throws {
         guard let query = SemanticScorer.queryVector(for: "subtracting complexity from life") else {
             return
@@ -375,18 +378,31 @@ struct ReaderMemoryTests {
 
 /// Inert service for toolbox tests that never reach the model.
 private final class NullAIService: AIService, @unchecked Sendable {
-    var availability: AIAvailability { .available }
-    func summarize(_ text: String, focus: SummaryFocus) async throws -> String { "" }
-    func answer(question: String, groundedIn: [GroundedPassage]) async throws -> GroundedAnswer {
+    var availability: AIAvailability {
+        .available
+    }
+
+    func summarize(_: String, focus _: SummaryFocus) async throws -> String {
+        ""
+    }
+
+    func answer(question _: String, groundedIn _: [GroundedPassage]) async throws -> GroundedAnswer {
         GroundedAnswer(text: "", citedPassageIDs: [])
     }
+
     func inlineNote(
-        for text: String,
-        kind: AIInlineNoteKind,
-        targetLanguage: String
-    ) async throws -> String { "" }
-    func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] { [] }
-    func toolStep(toolDocs: String, transcript: String) async throws -> AgentStep {
+        for _: String,
+        kind _: AIInlineNoteKind,
+        targetLanguage _: String
+    ) async throws -> String {
+        ""
+    }
+
+    func flashcards(from _: String, maxCount _: Int) async throws -> [Flashcard] {
+        []
+    }
+
+    func toolStep(toolDocs _: String, transcript _: String) async throws -> AgentStep {
         .finish(answer: "")
     }
 }

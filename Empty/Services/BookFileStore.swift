@@ -12,8 +12,17 @@ import Foundation
 /// `rootDirectory` so records survive container relocation. Default root is
 /// `Application Support/Books` — backed up, not user-visible; the imported
 /// file *is* the user's data.
-nonisolated struct BookFileStore: Sendable {
+nonisolated struct BookFileStore {
     var rootDirectory: URL
+
+    /// Shared default instance. Safe to use from main actor; created lazily
+    /// and cached because the root directory never changes during the session.
+    static let `default`: BookFileStore = {
+        guard let store = try? makeDefault() else {
+            fatalError("Failed to initialize default BookFileStore")
+        }
+        return store
+    }()
 
     /// Standard store under Application Support.
     static func makeDefault() throws -> BookFileStore {

@@ -6,10 +6,10 @@
 //  rule that writes never happen without reader confirmation.
 //
 
+@testable import Empty
 import Foundation
 import SwiftData
 import Testing
-@testable import Empty
 
 // MARK: - Cloud step parsing
 
@@ -68,35 +68,37 @@ private final class ScriptedAIService: AIService, @unchecked Sendable {
     nonisolated(unsafe) var seenTranscripts: [String] = []
 
     init(steps: [AgentStep]) {
-        self.stepQueue = steps
+        stepQueue = steps
     }
 
-    var availability: AIAvailability { .available }
+    var availability: AIAvailability {
+        .available
+    }
 
-    func summarize(_ text: String, focus: SummaryFocus) async throws -> String {
+    func summarize(_: String, focus _: SummaryFocus) async throws -> String {
         "summary"
     }
 
     func answer(
-        question: String,
-        groundedIn passages: [GroundedPassage]
+        question _: String,
+        groundedIn _: [GroundedPassage]
     ) async throws -> GroundedAnswer {
         GroundedAnswer(text: fallbackAnswer, citedPassageIDs: [])
     }
 
     func inlineNote(
-        for text: String,
-        kind: AIInlineNoteKind,
-        targetLanguage: String
+        for _: String,
+        kind _: AIInlineNoteKind,
+        targetLanguage _: String
     ) async throws -> String {
         fallbackAnswer
     }
 
-    func flashcards(from text: String, maxCount: Int) async throws -> [Flashcard] {
+    func flashcards(from _: String, maxCount: Int) async throws -> [Flashcard] {
         Array(flashcardsToReturn.prefix(maxCount))
     }
 
-    func toolStep(toolDocs: String, transcript: String) async throws -> AgentStep {
+    func toolStep(toolDocs _: String, transcript: String) async throws -> AgentStep {
         seenTranscripts.append(transcript)
         guard !stepQueue.isEmpty else { return .finish(answer: "done") }
         return stepQueue.removeFirst()
@@ -125,7 +127,8 @@ struct ReadingAgentTests {
             book: book,
             position: ReadingPosition(chapterIndex: 2, utf16Offset: 0),
             modelContext: context,
-            service: service
+            service: service,
+            instructions: []
         )
         return Fixture(container: container, book: book, toolbox: toolbox, service: service)
     }
@@ -151,7 +154,7 @@ struct ReadingAgentTests {
 
     @Test func transcriptPreludeReachesToolStep() async throws {
         let fixture = try makeFixture(steps: [
-            .finish(answer: "就这段来说，作者先收束再转折。")
+            .finish(answer: "就这段来说，作者先收束再转折。"),
         ])
         let agent = ReadingAgent(
             toolbox: fixture.toolbox,
@@ -169,6 +172,7 @@ struct ReadingAgentTests {
         #expect(transcript.contains("刚读过的上下文"))
         #expect(transcript.contains("读者:这一段在干什么？"))
     }
+
     @Test func searchPassagesReturnsEvidenceBlocks() async throws {
         let fixture = try makeFixture(steps: [])
         let context = fixture.container.mainContext
@@ -189,7 +193,6 @@ struct ReadingAgentTests {
         #expect(result.evidenceBlocks.first?.scope == .currentBook)
         #expect(result.evidenceBlocks.first?.emphasisTerms == ["simplicity"])
     }
-
 
     @Test func proposalsDoNotWriteUntilPerformed() async throws {
         let fixture = try makeFixture(steps: [])

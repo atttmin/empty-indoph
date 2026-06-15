@@ -12,7 +12,6 @@ import Foundation
 import Observation
 import SwiftData
 
-
 @MainActor
 @Observable
 final class CompanionModel {
@@ -42,20 +41,22 @@ final class CompanionModel {
         /// Confirm-gated writes the agent proposed with this answer.
         var actions: [CompanionAction] = []
     }
+
     struct EvidenceSection: Identifiable, Equatable {
         var scope: CompanionEvidenceScope
         var title: String
         var blocks: [CompanionEvidenceBlock]
 
-        var id: String { scope.rawValue }
+        var id: String {
+            scope.rawValue
+        }
     }
-
 
     var messages: [Message] = [
         Message(
             role: .ai,
             text: "我在。划到哪儿,问到哪儿 — 我只根据你已经读过的部分回答,不会剧透。"
-        )
+        ),
     ]
     var thinking = false
     var draft = ""
@@ -76,6 +77,13 @@ final class CompanionModel {
         guard !thinking,
               let signature = Self.themeProposalSignature(from: messages) else { return false }
         return signature != lastThemeProposalSignature
+    }
+
+    /// Returns the imported file URL for a book, if known. Used to discover
+    /// per-book instruction files (e.g. `CLAUDE.md`) in the book's container.
+    private func bookFileURL(for book: Book) -> URL? {
+        guard let relativePath = book.fileRelativePath else { return nil }
+        return BookFileStore.default.url(forRelativePath: relativePath)
     }
 
     func send(
@@ -137,7 +145,10 @@ final class CompanionModel {
                         book: book,
                         position: position,
                         modelContext: modelContext,
-                        service: resolution.service
+                        service: resolution.service,
+                        instructions: ReaderInstructionService().loadInstructions(
+                            bookFileURL: bookFileURL(for: book)
+                        )
                     )
                     let agent = ReadingAgent(
                         toolbox: toolbox,
@@ -235,7 +246,6 @@ final class CompanionModel {
         }
     }
 
-
     private func maybeAutoProposeTheme(
         for book: Book,
         service: any AIService
@@ -277,7 +287,7 @@ final class CompanionModel {
                         body: draft.body,
                         tags: draft.tags
                     )
-                )
+                ),
             ]
         ))
     }
@@ -294,6 +304,7 @@ final class CompanionModel {
         )
         return !readText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
     static func followUpQuestion(about text: String, maxCharacters: Int = 240) -> String {
         let normalized = text
             .components(separatedBy: .whitespacesAndNewlines)
@@ -386,9 +397,9 @@ final class CompanionModel {
         guard let signature = themeProposalSignature(from: messages),
               signature != lastSignature,
               let draft = try await makeThemeDraft(
-                from: messages,
-                targetLanguage: targetLanguage,
-                service: service
+                  from: messages,
+                  targetLanguage: targetLanguage,
+                  service: service
               ) else { return nil }
         return (signature, draft)
     }
@@ -419,7 +430,6 @@ final class CompanionModel {
         let resolvedBody = body?.isEmpty == false ? body! : text.trimmingCharacters(in: .whitespacesAndNewlines)
         return (resolvedTitle, resolvedBody, Array(tags.prefix(3)))
     }
-
 
     /// The pre-agent pipeline: spoiler-safe retrieval + one grounded answer.
     /// `answerLanguage` rides only on the model question — the retrieval
@@ -487,7 +497,7 @@ final class CompanionModel {
     ) {
         guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
               let actionIndex = messages[messageIndex].actions
-                  .firstIndex(where: { $0.id == actionID }),
+              .firstIndex(where: { $0.id == actionID }),
               !messages[messageIndex].actions[actionIndex].isDone
         else { return }
         let action = messages[messageIndex].actions[actionIndex]
@@ -499,12 +509,16 @@ final class CompanionModel {
                     book: book,
                     position: position,
                     modelContext: modelContext,
-                    service: resolution.service
+                    service: resolution.service,
+                    instructions: ReaderInstructionService().loadInstructions(
+                        bookFileURL: bookFileURL(for: book)
+                    )
                 )
                 let outcome = try await toolbox.perform(action)
                 if let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
                    let actionIndex = messages[messageIndex].actions
-                       .firstIndex(where: { $0.id == actionID }) {
+                   .firstIndex(where: { $0.id == actionID })
+                {
                     messages[messageIndex].actions[actionIndex].isDone = true
                 }
                 messages.append(Message(role: .ai, text: "✓ \(outcome)"))
@@ -540,7 +554,8 @@ final class CompanionModel {
         let crossBook = evidenceBlocks.filter { $0.scope == .crossBook }
         if !currentBook.isEmpty,
            crossBook.isEmpty,
-           currentBook.allSatisfy({ $0.kind == .passage }) {
+           currentBook.allSatisfy({ $0.kind == .passage })
+        {
             return "直接证据 · 当前段落"
         }
         if !crossBook.isEmpty {
@@ -631,11 +646,12 @@ final class CompanionModel {
             var cursor = text.startIndex
             while cursor < text.endIndex,
                   let range = text.range(
-                    of: term,
-                    options: [.caseInsensitive, .diacriticInsensitive],
-                    range: cursor..<text.endIndex,
-                    locale: .current
-                  ) {
+                      of: term,
+                      options: [.caseInsensitive, .diacriticInsensitive],
+                      range: cursor ..< text.endIndex,
+                      locale: .current
+                  )
+            {
                 ranges.append(range)
                 cursor = range.upperBound
             }
@@ -645,7 +661,7 @@ final class CompanionModel {
         for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }).dropFirst() {
             let lastIndex = merged.index(before: merged.endIndex)
             if range.lowerBound <= merged[lastIndex].upperBound {
-                merged[lastIndex] = merged[lastIndex].lowerBound..<max(merged[lastIndex].upperBound, range.upperBound)
+                merged[lastIndex] = merged[lastIndex].lowerBound ..< max(merged[lastIndex].upperBound, range.upperBound)
             } else {
                 merged.append(range)
             }
@@ -689,10 +705,11 @@ final class CompanionModel {
 
     private static func quotedSource(in text: String) -> String? {
         guard let start = text.range(of: "「"),
-              let end = text.range(of: "」", range: start.upperBound..<text.endIndex) else {
+              let end = text.range(of: "」", range: start.upperBound ..< text.endIndex)
+        else {
             return nil
         }
-        return String(text[start.upperBound..<end.lowerBound])
+        return String(text[start.upperBound ..< end.lowerBound])
     }
 
     private static func excerptPreview(
@@ -712,7 +729,7 @@ final class CompanionModel {
             let utf16 = Array(trimmed.utf16)
             let lower = max(0, range.lowerBound.utf16Offset(in: trimmed) - 28)
             let upper = min(utf16.count, range.upperBound.utf16Offset(in: trimmed) + 44)
-            let snippet = String(decoding: utf16[lower..<upper], as: UTF16.self)
+            let snippet = String(decoding: utf16[lower ..< upper], as: UTF16.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let prefix = lower > 0 ? "…" : ""
             let suffix = upper < utf16.count ? "…" : ""

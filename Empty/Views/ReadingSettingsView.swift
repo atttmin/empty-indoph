@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SwiftData
 import SwiftUI
 
 struct ReadingSettingsView: View {
@@ -22,12 +23,15 @@ struct ReadingSettingsView: View {
     var bookID: UUID? = nil
 
     @State private var bookTargetOverride: String?
+    @State private var instructionSources: [ReaderInstructionSource] = []
+    @State private var showingInstructionPopover = false
 
     @AppStorage("reader.traditional") private var traditionalChinese = false
     @AppStorage("reader.pdf.invert") private var pdfInvert = false
     @AppStorage("reader.pdf.twoup") private var pdfTwoUp = false
     @AppStorage("reader.pdf.autocrop") private var pdfAutoCrop = false
     @AppStorage("reader.vertical.mac") private var verticalText = false
+    @Environment(\.modelContext) private var modelContext
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.emptyPalette) private var palette
@@ -86,7 +90,7 @@ struct ReadingSettingsView: View {
                 settingRow(label: "字号") {
                     HStack(spacing: 12) {
                         Text("A").font(.system(size: 11, design: .serif))
-                        Slider(value: $fontSize, in: 12...28, step: 1)
+                        Slider(value: $fontSize, in: 12 ... 28, step: 1)
                             .tint(palette.accent)
                         Text("A").font(.system(size: 20, design: .serif))
                     }
@@ -95,7 +99,7 @@ struct ReadingSettingsView: View {
                 settingRow(label: "行距") {
                     HStack(spacing: 12) {
                         Image(systemName: "text.alignleft").font(.system(size: 10))
-                        Slider(value: $lineSpacing, in: 1.2...2.2, step: 0.1)
+                        Slider(value: $lineSpacing, in: 1.2 ... 2.2, step: 0.1)
                             .tint(palette.accent)
                         Image(systemName: "text.alignleft").font(.system(size: 16))
                     }
@@ -178,11 +182,11 @@ struct ReadingSettingsView: View {
                         optionChip("繁体显示", isOn: $traditionalChinese)
                         optionChip("PDF 夜间反色", isOn: $pdfInvert)
                         #if os(macOS)
-                        optionChip("PDF 双页", isOn: $pdfTwoUp)
-                        optionChip("PDF 裁边", isOn: $pdfAutoCrop)
-                        optionChip("竖排（翻页·实验）", isOn: $verticalText)
+                            optionChip("PDF 双页", isOn: $pdfTwoUp)
+                            optionChip("PDF 裁边", isOn: $pdfAutoCrop)
+                            optionChip("竖排（翻页·实验）", isOn: $verticalText)
                         #else
-                        optionChip("PDF 裁边", isOn: $pdfAutoCrop)
+                            optionChip("PDF 裁边", isOn: $pdfAutoCrop)
                         #endif
                     }
                 }
@@ -201,6 +205,42 @@ struct ReadingSettingsView: View {
                         }
                     }
                 }
+                if bookID != nil {
+                    settingRow(label: "AI 指令") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                if instructionSources.isEmpty {
+                                    Text("未找到 instructions.md / CLAUDE.md / AGENTS.md")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(palette.ink3)
+                                } else {
+                                    Text("已发现 \(instructionSources.count) 条指令")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(palette.ink)
+                                }
+                                Spacer()
+                                Button {
+                                    showingInstructionPopover = true
+                                } label: {
+                                    Text("查看")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(palette.accent)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 2)
+                                        .background(palette.accentSoft, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .popover(isPresented: $showingInstructionPopover) {
+                                    ReaderInstructionPopover(sources: instructionSources)
+                                        .frame(minWidth: 320, minHeight: 240)
+                                }
+                            }
+                            Text("在书的文件夹或 ~/Empty/instructions.md 放置 Markdown 文件，即可定制伴读语气与规则。")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(palette.ink3)
+                        }
+                    }
+                }
                 previewCard
             }
             .padding(EdgeInsets(top: 16, leading: 20, bottom: 20, trailing: 20))
@@ -209,14 +249,30 @@ struct ReadingSettingsView: View {
         }
         .background(palette.window)
         #if os(iOS)
-        .presentationDetents([.large, .medium])
-        .presentationDragIndicator(.visible)
+            .presentationDetents([.large, .medium])
+            .presentationDragIndicator(.visible)
         #endif
-        .onAppear {
-            if let bookID {
-                bookTargetOverride = LanguageSettings.bookOverride(for: bookID)?.target
+            .onAppear {
+                if let bookID {
+                    bookTargetOverride = LanguageSettings.bookOverride(for: bookID)?.target
+                    loadInstructionSources()
+                }
             }
+    }
+
+    private func loadInstructionSources() {
+        guard let bookID else {
+            instructionSources = []
+            return
         }
+        guard let book = try? modelContext.fetch(
+            FetchDescriptor<Book>(predicate: #Predicate { $0.id == bookID })
+        ).first else {
+            instructionSources = []
+            return
+        }
+        let fileURL = book.fileRelativePath.map { BookFileStore.default.url(forRelativePath: $0) }
+        instructionSources = ReaderInstructionService().loadInstructions(bookFileURL: fileURL)
     }
 
     private var previewCard: some View {
@@ -376,7 +432,6 @@ struct ReadingSettingsView: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
     private func optionScroll<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
