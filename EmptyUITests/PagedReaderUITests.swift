@@ -8,6 +8,7 @@
 
 import XCTest
 
+#if os(iOS)
 final class PagedReaderUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -101,3 +102,4 @@ final class PagedReaderUITests: XCTestCase {
         )
     }
 }
+#endif
