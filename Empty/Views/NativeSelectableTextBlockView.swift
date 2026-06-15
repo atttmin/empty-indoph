@@ -452,6 +452,7 @@ private struct NativeSelectableTextRepresentable: NSViewRepresentable {
         )
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var model: NativeTextRenderModel?
         var programmaticChange = false
