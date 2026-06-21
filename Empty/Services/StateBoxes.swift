@@ -30,4 +30,8 @@ final class TaskBox {
 @MainActor
 final class DictionaryBox<Key: Hashable, Value> {
     var values: [Key: Value] = [:]
+
+    // Explicit empty deinit works around a Swift 6.2 release-build crash in
+    // the synthesized generic deinit (rdar://TBD — EarlyPerfInliner assertion).
+    deinit {}
 }
