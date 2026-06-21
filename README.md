@@ -1,132 +1,118 @@
-# 空 · Empty
+# Empty · 空 — AI Reading Companion for Deep Readers
 
 [![CI](https://github.com/DaviRain-Su/empty/actions/workflows/ci.yml/badge.svg)](https://github.com/DaviRain-Su/empty/actions/workflows/ci.yml)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20iOS%20%7C%20iPadOS%20%7C%20visionOS-999999?logo=apple)](https://github.com/DaviRain-Su/empty)
+[![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift)](https://swift.org)
+[![Xcode](https://img.shields.io/badge/Xcode-26%2B-blue?logo=xcode)](https://developer.apple.com/xcode/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Website](https://img.shields.io/badge/website-empty--78c.pages.dev-8A2BE2)](https://empty-78c.pages.dev)
 
-**AI 伴读 · 深读工作台**
+> **An open-source, native SwiftUI EPUB & PDF reader with a spoiler-free AI companion.**  
+> Mac is your deep-reading workspace; iPhone / iPad is your pocket companion. Your books, your notes, your vocabulary, and your cross-book memory stay local-first and private by default.
 
-多平台 SwiftUI 阅读应用：在**不剧透**的前提下，用 AI 帮你摘要、问书、记笔记、复习词汇。  
-Mac 是完整的「深读工作台」；iOS / iPad 提供轻量阅读与 AI 辅助。
-
-> *空是底，朱是点 —— 应用是空房间，AI 是页边那一笔朱批。*
-
-**官网：** [empty-78c.pages.dev](https://empty-78c.pages.dev) · [GitHub](https://github.com/DaviRain-Su/empty)
-
----
-
-## 截图
-
-以下均为**真实应用界面**截屏（非概念图）。重新生成见 [docs/screenshots/README.md](docs/screenshots/README.md)。
-
-### macOS · 书库
-
-深读工作台书库：继续阅读卡片、书架与导入入口。
-
-![macOS 书库](docs/screenshots/mac-library.png)
-
-### macOS · 阅读
-
-双语对照模式、AI 章节概览与 EPUB 阅读器。
-
-![macOS 阅读器](docs/screenshots/mac-reader.png)
-
-### iOS · 书库
-
-随身伴读书库 Tab，继续阅读与导入。
-
-![iOS 书库](docs/screenshots/ios-library.png)
-
-### iOS · 阅读
-
-阅读 Tab：章节进度、「译」与「朗读」、底部胶囊导航与「朱」按钮。
-
-![iOS 阅读](docs/screenshots/ios-reading.png)
+<p align="center">
+  <a href="https://empty-78c.pages.dev">Website</a> ·
+  <a href="#download">Download</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#roadmap">Roadmap</a>
+</p>
 
 ---
 
-## 特性
+## 🎯 Why Empty?
 
-### 阅读
+Most AI reading tools summarize the *whole* book and accidentally spoil the ending. **Empty only uses what you have already read.** Every AI feature — recap, explanation, translation, vocabulary, flashcards, and thought links — is filtered at the data layer, not just guarded by a prompt.
 
-- **EPUB / PDF 导入与阅读** — EPUB 走原生 SwiftUI 块模型渲染（XHTML 解析为标题 / 段落 / 引文 / 列表 / 表格 / 脚注 / 图片块，纵向滚动，不经 WebView），PDF 走 PDFKit；暗色模式、字体与行距调节
-- **高亮与批注** — 精确 UTF-16 锚定 + 前后文消歧，按准确范围绘制；高亮列表内可写 / 编辑批注，点击精确跳回原文位置
-- **划词与跨段选取** — 段内原生精确划词；「跨段」打开整章选取面板（自动定位当前阅读位置），选区回到同一套解释 / 翻译 / 高亮流程
-- **阅读进度** — 章内字符级（`utf16Offset`）进度与会话记录，滚动即上报，续读落回段内精确位置
+Built for readers who want to:
 
-### 防剧透 AI
-
-所有 AI 功能只基于**你已经读过的文本**，在数据层过滤未读内容，而非仅靠 prompt 约束：
-
-- **章节摘要 / Recap** — 「Previously on…」式回顾；Mac 阅读器内为 ①②③ 结构化章节概览（含「← 你在这里」与本章时长估计）
-- **今译 / 导读 / 辩难 / 文献**（EPUB）— Mac 为左右分栏双语 + 文内镜片，iOS 为段下镜片；**预译 + 永不阻塞**：原文先渲染、当前镜片从本地缓存补齐，云端阅读时自动预热后两章的当前镜片，**不重复翻译 / 不重复生成**（`TranslationStore` 持久缓存，☰ 目录里可见双语章节预译状态与全书缓存量）
-- **朱 · 阅读 Agent** — 伴读对话由模型自主调度阅读工具（查已读 / 回顾 / 解释 / 找关联 / 建议生词 / 生成闪卡），步骤轨迹在对话中可见，**写操作一律待确认**；工具全部走防剧透管线，失败自动回退 grounded 问答。Mac 为侧栏面板，iOS 为「朱」半屏 sheet，答案可「存为卡片」，证据区会把**本书证据 / 跨书回声**分开展示，并对命中词作强调
-- **词汇释义** — 选中查词，接入间隔复习
-- **思维链接** — 跨书高亮的主题关联发现，可存为链接卡（Mac + iOS）
-- **书库「上次读到」**（Mac）— 防剧透 AI 回顾 + 剩余阅读时长估计；iOS 书库有「朱批 · 今日伴读」复习提醒
-
-### 学习工具（Mac）
-
-- **笔记屏** — 高亮卡片 + 问答卡 / 链接卡 / 复习卡（卡内即可间隔复习），知识图谱可展开为完整图谱
-- **词汇屏** — Ebbinghaus 间隔复习（1 → 2 → 4 → 7 → 15 → 30 天），挖空例句 + 下次队列预告
-- **朗读**（macOS TTS）
-
-### AI 提供商
-
-| 模式 | 说明 |
-|------|------|
-| **On-Device**（默认） | Apple Foundation Models，本地、免费、私密 |
-| **Cloud（BYOK）** | 两套标准:**OpenAI 兼容**（DeepSeek 预设）与 **Anthropic 兼容**（Kimi Code 预设）；密钥存 Keychain |
-
-Kimi Code 走 Anthropic Messages 接口(会员 Code 权益,密钥在 kimi.com/code/console 创建)。在侧栏 **AI 状态**（`AIDiagnosticsView`）里选接口标准/预设、填密钥并做连通性测试。
+- **Read deeply** with an AI that respects plot boundaries.
+- **Own their data**: books, highlights, notes, vocabulary, and memory stay on-device by default.
+- **Learn actively** with built-in spaced-repetition vocabulary, flashcards, and cross-book theme discovery.
+- **Go offline** with local Apple Intelligence and optional BYOK cloud AI (OpenAI-compatible / Anthropic-compatible).
 
 ---
 
-## 平台支持
+## 🖼 Screenshots
 
-| 平台 | 体验 |
-|------|------|
-| **macOS** | 完整四屏工作台：书库 / 阅读 / 笔记 / 词汇 |
-| **iOS / iPadOS** | 随身伴读：书库 / 阅读 / 卡片 + 朱 AI 半屏对话、「译」逐段双语、思维链接、卡片与生词复习 |
-| **visionOS** | 可编译，暂无专属 UI |
+All screenshots are real app UI, not mock-ups. See [`docs/screenshots/README.md`](docs/screenshots/README.md) for regeneration notes.
 
-**系统要求：** Xcode 26+；项目默认部署目标 iOS / macOS **26.2**，CI 会以 iOS 18 / macOS 15 覆盖 availability fallback  
-**CI：** GitHub Actions 在 `macos-latest` 上串行运行 `EmptyTests`，并单独构建 iOS Simulator
-**Bundle ID：** `davirian.Empty`
+| macOS Library | macOS Reader | iOS Library | iOS Reader |
+|---|---|---|---|
+| ![macOS library](docs/screenshots/mac-library.png) | ![macOS reader](docs/screenshots/mac-reader.png) | ![iOS library](docs/screenshots/ios-library.png) | ![iOS reading](docs/screenshots/ios-reading.png) |
+| Deep-reading workspace with continue-reading cards, bookshelves, and import. | Bilingual side-by-side reading, AI chapter overview, and native EPUB rendering. | Pocket library tab with continue-reading and import. | Reading tab with chapter progress, translation, tts, and the “Zhu” AI companion button. |
 
 ---
 
-## 快速开始
+## ✨ Features
 
-### 1. 克隆仓库
+### 📖 Reading Engine
+
+- **Native EPUB & PDF support** — EPUB is rendered with a native SwiftUI block model (headings, paragraphs, quotes, lists, tables, footnotes, images) **without a WebView**. PDF uses PDFKit.
+- **Precise highlights & notes** — UTF-16 anchored with context disambiguation; tap a highlight to jump back to the exact source location.
+- **Word-accurate selection & cross-paragraph selection** — native in-paragraph selection plus a full-chapter selection sheet.
+- **Character-level reading progress** — `utf16Offset` progress and session tracking; resume inside a paragraph.
+- **Dark mode, typography, and line-spacing controls**.
+
+### 🤖 Spoiler-Free AI Companion (朱)
+
+Every AI feature is limited to text you have already read:
+
+- **Chapter Recap** — “Previously on…” recap with a structured chapter overview and a “← you are here” marker.
+- **Inline Translation / Guide / Debate / References** (EPUB) — Mac uses side-by-side bilingual panels; iOS uses paragraph lenses. Pre-translated and cached so the original text renders first and never blocks.
+- **Zhu Reading Agent** — A conversational companion that schedules reading tools (search read text, recap, explain, find links, suggest vocabulary, draft flashcards). All writes are confirm-gated; failures fall back to grounded Q&A.
+- **Vocabulary lookup** — One-tap word lookup with spaced-repetition scheduling.
+- **Thought Links** — Discover thematic echoes across your highlights and save them as link cards.
+- **Library “Continue Reading”** — Spoiler-free recap + estimated remaining read time.
+
+### 🧠 Learning Tools (Mac)
+
+- **Notes screen** — Highlight cards + Q&A / link / review cards with in-card spaced repetition and an expandable knowledge graph.
+- **Vocabulary screen** — Ebbinghaus ladder (1 → 2 → 4 → 7 → 15 → 30 days), cloze example sentences, and next-queue preview.
+- **Text-to-Speech** on macOS.
+
+### 🔒 AI Providers
+
+| Mode | Details |
+|------|---------|
+| **On-Device (default)** | Apple Foundation Models — local, free, private. |
+| **Cloud (BYOK)** | OpenAI-compatible (DeepSeek preset) or Anthropic-compatible (Kimi Code preset); keys stored in Keychain. |
+
+Choose the provider and run a connectivity test in the **AI Diagnostics** panel (`AIDiagnosticsView`).
+
+---
+
+## ⬇️ Download
+
+The latest macOS build is produced by GitHub Actions and attached as an artifact:
+
+[![CI Artifact](https://img.shields.io/badge/CI%20Artifact-Empty%20macOS-blue?logo=github)](https://github.com/DaviRain-Su/empty/actions/workflows/ci.yml)
+
+> The artifact is an **unsigned** `.dmg`. macOS Gatekeeper will warn on first open — right-click the app and choose **Open**, or allow it in **System Settings → Privacy & Security**.
+
+For a signed / notarized release suitable for wider distribution, add an Apple Developer ID certificate and notarization credentials to the CI workflow.
+
+You can also build from source (see [Quick Start](#quick-start)).
+
+---
+
+## 🚀 Quick Start
 
 ```bash
 git clone https://github.com/DaviRain-Su/empty.git
 cd Empty
-```
-
-### 2. 用 Xcode 打开
-
-```bash
 open Empty.xcodeproj
 ```
 
-选择目标平台（My Mac / iPhone Simulator），`Cmd + R` 运行。
+1. Select a destination (My Mac / iPhone Simulator).
+2. Press `Cmd + R` to run.
+3. Tap **Import** and choose an `.epub` or `.pdf` file.
+4. Open the **AI Diagnostics** panel to verify on-device AI or connect your own API key.
 
-### 3. 导入书籍
-
-点击 **导入**，选择 `.epub` 或 `.pdf` 文件。
-
-### 4. 配置 AI（可选）
-
-1. 打开 **AI 诊断** 面板
-2. 默认使用本机 Apple Intelligence；若不可用，可切换到 Cloud 并填入 API Key
-3. 运行一次 Summarize 测试确认管线正常
-
----
-
-## 运行测试
+### Run tests
 
 ```bash
-# macOS 单元测试（与 CI 一致：串行，跳过 UI 测试）
 xcodebuild test -project Empty.xcodeproj -scheme Empty \
   -destination 'platform=macOS' \
   -parallel-testing-enabled NO \
@@ -135,16 +121,31 @@ xcodebuild test -project Empty.xcodeproj -scheme Empty \
   CODE_SIGNING_ALLOWED=NO \
   MACOSX_DEPLOYMENT_TARGET=15.0 \
   IPHONEOS_DEPLOYMENT_TARGET=18.0
+```
 
-> 若自定义其它 `xcodebuild` 命令，本地也可追加
-> `CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""`
-> 跑本地 unsigned debug build。
+For local unsigned debug builds you can also add:
 
-当前 **222/222** 单元测试全部通过；UI smoke / 截图测试在 `EmptyUITests` 中单独运行。
+```bash
+CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+```
+
+All **237** unit tests pass on CI and locally.
 
 ---
 
-## 架构概览
+## 💻 Platform Support
+
+| Platform | Experience |
+|----------|------------|
+| **macOS** | Full four-pane workspace: Library / Reader / Notes / Vocabulary. |
+| **iOS / iPadOS** | Pocket companion: Library / Reader / Cards + Zhu AI sheet, paragraph translation, thought links, and vocabulary review. |
+| **visionOS** | Compiles; no dedicated UI yet. |
+
+**Requirements:** Xcode 26+. Default deployment target is iOS / macOS 26.2; CI falls back to iOS 18 / macOS 15 for availability testing.
+
+---
+
+## 🏗 Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -153,105 +154,130 @@ xcodebuild test -project Empty.xcodeproj -scheme Empty \
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────▼────────────────────────────────┐
-│  Services                                             │
-│  Library · BookIndexer · ChunkRetriever · AIService   │
-└────────────┬───────────────────────┬──────────────────┘
+│  Services                                               │
+│  Library · BookIndexer · ChunkRetriever · AIService     │
+└────────────┬───────────────────────┬────────────────────┘
              │                       │
    ┌─────────▼─────────┐   ┌─────────▼─────────┐
-   │  Reader Data     │   │  Local Derived    │
-   │  (device-only)   │   │  (device-only)    │
-   │  Book, Highlight │   │  Chapter, Chunk   │
-   │  Session, Vocab  │   │  translations     │
-   │  Cards, Memory   │   │  + embeddings     │
-   │  Bookmark        │   │                   │
+   │  Reader Data      │   │  Local Derived    │
+   │  (device-only)    │   │  (device-only)    │
+   │  Book, Highlight  │   │  Chapter, Chunk   │
+   │  Session, Vocab   │   │  translations     │
+   │  Cards, Memory    │   │  + embeddings     │
+   │  Bookmark         │   │                   │
 ```
 
-核心设计原则：**先把单机阅读做好，备份只碰读者笔记，不碰书籍正文。**
+Core principle: **do local deep-reading first; backups only touch reader notes, never book content.**
 
-当前没有云同步、账号系统或自建 server：
-- 书库元数据、阅读进度、高亮、批注、单词、卡片和 ReaderMemory 都只保存在本机。
-- EPUB/PDF 文件、章节正文、译文缓存、embedding 与 API Key 仍只留本机。
-- 读者笔记包已支持 `.empty-notes` 导出 / 导入，高亮批注和记忆可迁移，正文不进包。
+- Library metadata, reading progress, highlights, notes, vocabulary, cards, and ReaderMemory stay on-device.
+- EPUB/PDF files, chapter text, translation cache, embeddings, and API keys remain local.
+- Reader notes can be exported/imported as an `.empty-notes` package (highlights, notes, vocabulary, cards, memory, and book metadata). Book content is not included.
 
-数据入口现在是 **本机数据** 面板，可导出 / 导入读者笔记包，并解释本机存储边界。跨 store 仍只通过 `Book.id` 关联。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/SYNC-BACKUP-DESIGN.md](docs/SYNC-BACKUP-DESIGN.md)。
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/SYNC-BACKUP-DESIGN.md`](docs/SYNC-BACKUP-DESIGN.md) for more.
 
 ---
 
-## 项目结构
+## 📁 Project Structure
 
 ```
 Empty/
-├── Empty/                 # 主应用
-│   ├── Models/            # SwiftData 模型
-│   ├── Services/          # 业务逻辑与 AI 管线
-│   ├── Views/             # SwiftUI 视图
-│   │   └── Mac/           # macOS 深读工作台
-│   └── DesignSystem/      # 朱批设计系统
-├── EmptyTests/            # 单元测试（Swift Testing + XCTest）
-├── EmptyUITests/          # UI smoke + 截图测试（播种演示书）
-├── docs/                  # 架构与开发文档
-│   └── screenshots/       # README 与官网用图
-└── website/               # 静态落地页（Cloudflare Pages）
+├── Empty/                 # Main app
+│   ├── Models/            # SwiftData models
+│   ├── Services/          # Business logic & AI pipeline
+│   ├── Views/             # SwiftUI views
+│   │   └── Mac/           # macOS deep-reading workspace
+│   └── DesignSystem/      # Vermilion (朱批) design system
+├── EmptyTests/            # Unit tests (Swift Testing + XCTest)
+├── EmptyUITests/          # UI smoke + screenshot tests
+├── docs/                  # Architecture & dev docs
+│   └── screenshots/       # README & website assets
+├── website/               # Static landing page (Cloudflare Pages)
+└── scripts/               # Build & packaging scripts
 ```
 
 ---
 
-## 推送到 GitHub
+## 🗺 Roadmap
 
-本地已完成初始提交后，在 GitHub 新建空仓库（不要勾选 README / .gitignore，避免冲突），然后：
+Highlights of what already works:
 
-```bash
-git remote add origin https://github.com/DaviRain-Su/empty.git
-git branch -M main
-git push -u origin main
-```
+- [x] Character-level reading position (`utf16Offset`) for spoiler-safe AI.
+- [x] Language-aware semantic embeddings for Chinese and English.
+- [x] Flashcard UI with highlight-to-card and spaced repetition.
+- [x] iOS vocabulary / notes / study tabs.
+- [x] PDF reading, pagination, and highlight annotations.
+- [x] Bilingual side-by-side / inline guide panels.
+- [x] Structured chapter overview + save-as-card + knowledge graph.
+- [x] Library hero AI “continue reading” + estimated remaining time.
+- [x] iOS pocket companion with Zhu AI, paragraph translation, thought links.
+- [x] Pre-translation cache with visualization.
+- [x] Reading Agent v1 with tool loop, trace, and confirm-gated writes.
+- [x] Kimi Code (Anthropic-compatible) cloud path.
+- [x] Native SwiftUI EPUB renderer with precise selection and highlights.
+- [x] ReaderMemory Phase 1/2 + 1b: cross-book ingest/recall, propose_memory, local embeddings, Q&A compression into themes.
+- [x] Living thought links: link cards / theme memory feed ThoughtLinkFinder.
+- [x] `.empty-notes` reader-note package export / import.
 
-若使用 SSH：
-
-```bash
-git remote add origin git@github.com:DaviRain-Su/empty.git
-git push -u origin main
-```
-
-**推送前建议检查：**
-
-- `.gitignore` 已排除 `xcuserdata/`、`DerivedData/` 等本地文件
-- 不要在仓库中提交 API Key（密钥通过 Keychain 存储，不进备份包）
-
----
-
-## 路线图
-
-- [x] 章内阅读位置（`utf16Offset`）上报，实现精细防剧透
-- [x] 语义检索中文支持（语言感知 embedding）
-- [x] 闪卡 UI（高亮生成 + 间隔复习）
-- [x] iOS 词汇 / 笔记 / 学习 Tab
-- [x] 同步入口清空：移除 iCloud / 自建 server / 文件夹同步 / Passkey；当前只保留本机 reader data 与本机派生数据（`BackupSettingsView`）
-- [x] PDF 阅读支持（PDFKit 分页阅读 + 按页索引）
-- [x] PDF 划词与高亮（选区接入 AI 操作，高亮以 PDF 注释渲染）
-- [x] Mac 笔记屏 AI 主题建议
-- [x] 双语对照 / 导读逐段在文内展开（对齐 01 Mac 原型）
-- [x] 结构化章节概览（①②③ + 你在这里 + 时长）、「存为卡片 / 链接卡」、完整知识图谱
-- [x] 书库 hero AI「上次读到」与剩余时长、生词挖空复习与下次队列预告
-- [x] iOS 随身伴读对齐 02 原型：书库 / 阅读 / 卡片 + 朱 半屏 AI、「译」逐段双语、思维链接、今日伴读
-- [x] 预译 + 翻译持久化（设计第 2 轮）：Mac 左右分栏双语、本地译文缓存与可视化、☰ 章节目录面板
-- [x] 阅读 Agent v1：工具化现有能力 + 双路 agent loop（on-device guided generation / cloud JSON mode）、步骤轨迹、写操作确认
-- [x] Kimi Code（Anthropic 兼容）云端路径 + 接口标准切换
-- [x] EPUB 渲染线从 WebView 迁移到原生 SwiftUI：块模型解析、精确高亮 / 选区、跨段选取、高亮批注与精确跳回
-- [x] **ReaderMemory Phase 1/2 + 1b 基础版**（见 [docs/READER-MEMORY-PLAN.md](docs/READER-MEMORY-PLAN.md)）：跨书记忆 ingest/recall、伴读 `recall_reader_memory`、`propose_memory` 确认写入、本地 `MemoryEmbedding` 持久语义路、旧问答压缩为 `theme`、思维链接走记忆召回路
-- [x] **活思维链接基础升级**（见 [docs/LIBER-PORT-PLAN.md](docs/LIBER-PORT-PLAN.md) Wave 1）：链接卡 / 主题记忆可参与 `ThoughtLinkFinder`，AI theme/why 仍按需生成
-- [x] `.empty-notes` 读者笔记包：导出 / 导入高亮、批注、单词、卡片、ReaderMemory 和书籍元数据；书文件、正文、译文缓存、embedding 不进包。
-完整变更记录见 [CHANGELOG.md](CHANGELOG.md)。架构与规划见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+See [CHANGELOG.md](CHANGELOG.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/READER-MEMORY-PLAN.md](docs/READER-MEMORY-PLAN.md), and [docs/LIBER-PORT-PLAN.md](docs/LIBER-PORT-PLAN.md) for full details.
 
 ---
 
-## 许可证
+## 🤝 Contributing & Community
+
+If Empty helps you read more deeply, please consider **giving it a ⭐️** — it makes the project easier for others to discover.
+
+- Found a bug? Open an [issue](https://github.com/DaviRain-Su/empty/issues).
+- Have an idea? Start a [discussion](https://github.com/DaviRain-Su/empty/discussions).
+- Want to contribute? Look for issues labeled `good first issue`.
+
+---
+
+## 📄 License
 
 [MIT License](LICENSE) — Copyright © 2026 davirian
 
 ---
 
-## 致谢
+## 🙏 Acknowledgements
 
-设计系统「朱批 Vermilion」来自 Empty. 空 产品原型。  
-AI 层抽象参考 Apple Foundation Models 与 OpenAI 兼容 API 的最佳实践。
+- Design system **Vermilion (朱批)** from the Empty product prototype.
+- AI abstraction inspired by Apple Foundation Models and OpenAI-compatible API best practices.
+
+---
+
+# 空 · Empty — 中文介绍
+
+**AI 伴读 · 深读工作台**
+
+多平台 SwiftUI 阅读应用：在**不剧透**的前提下，用 AI 帮你摘要、问书、记笔记、复习词汇。Mac 是完整的「深读工作台」；iOS / iPad 提供轻量阅读与 AI 辅助。
+
+> *空是底，朱是点 —— 应用是空房间，AI 是页边那一笔朱批。*
+
+**官网：** [empty-78c.pages.dev](https://empty-78c.pages.dev) · [GitHub](https://github.com/DaviRain-Su/empty)
+
+## 核心特性
+
+- **防剧透 AI**：所有 AI 功能只基于你已经读过的文本，在数据层过滤未读内容。
+- **EPUB / PDF 原生阅读**：EPUB 走原生 SwiftUI 块模型渲染，不经 WebView；PDF 走 PDFKit。
+- **朱 · 阅读 Agent**：伴读对话自主调度阅读工具，写操作一律待确认。
+- **高亮与批注**：精确 UTF-16 锚定，点击精确跳回原文。
+- **词汇与闪卡**：Ebbinghaus 间隔复习、挖空例句、跨书思维链接。
+- **本地优先**：默认 Apple Intelligence；可选云端 BYOK，密钥存 Keychain。
+
+## 快速开始
+
+```bash
+git clone https://github.com/DaviRain-Su/empty.git
+cd Empty
+open Empty.xcodeproj
+```
+
+选择目标平台（My Mac / iPhone Simulator），`Cmd + R` 运行。导入 `.epub` 或 `.pdf` 即可开始阅读。
+
+## 下载
+
+最新 macOS 构建由 GitHub Actions 产出， artifact 名为 `Empty-macOS`，下载后即为 `.dmg`。注意当前为未签名版本，首次打开需在「系统设置 → 隐私与安全性」中允许。
+
+## 参与
+
+如果这个项目对你有帮助，请点亮 ⭐️ 让更多人发现它。欢迎提交 issue、参与 discussion 或认领 `good first issue`。
