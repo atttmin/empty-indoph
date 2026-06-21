@@ -1237,7 +1237,9 @@ struct MacReaderScreen: View {
                         .lookupWithAI(
                             word: word,
                             sentence: selection.text,
-                            source: source
+                            source: source,
+                            book: book,
+                            sourcePosition: currentReadingPosition
                         )
                     glossEntry = entry
                 }

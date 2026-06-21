@@ -37,6 +37,25 @@ final class VocabEntry {
     var sentence: String?
     /// Where it came from, e.g. "Walden · Ch.2".
     var source: String?
+    /// Exact reader position for returning to the source sentence.
+    var sourceChapterIndex: Int?
+    var sourceUTF16Offset: Int?
+
+    var sourcePosition: ReadingPosition? {
+        guard let sourceChapterIndex, let sourceUTF16Offset else { return nil }
+        return ReadingPosition(
+            chapterIndex: sourceChapterIndex,
+            utf16Offset: sourceUTF16Offset
+        )
+    }
+
+    func setSourcePosition(_ position: ReadingPosition?) {
+        sourceChapterIndex = position?.chapterIndex
+        sourceUTF16Offset = position?.utf16Offset
+    }
+
+    var book: Book?
+
 
     /// 1-based rung on `ladderDays`. Clamped on read so stored data can
     /// never crash the scheduler.

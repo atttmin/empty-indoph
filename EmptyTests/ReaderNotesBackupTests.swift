@@ -31,6 +31,9 @@ struct ReaderNotesBackupTests {
         #expect(package.counts.studyCards == 1)
         #expect(package.studyCards.first?.sourceChapterIndex == 0)
         #expect(package.studyCards.first?.sourceUTF16Offset == 3)
+        #expect(package.vocabEntries.first?.bookID == package.books.first?.id)
+        #expect(package.vocabEntries.first?.sourceChapterIndex == 0)
+        #expect(package.vocabEntries.first?.sourceUTF16Offset == 5)
         #expect(package.counts.memoryItems == 1)
         #expect(encoded.contains("深读始于空白"))
         #expect(!encoded.contains("NEVER_EXPORT_FULL_TEXT"))
@@ -65,6 +68,8 @@ struct ReaderNotesBackupTests {
         #expect(cards.first?.book?.id == sourceBook.id)
         #expect(cards.first?.sourcePosition == ReadingPosition(chapterIndex: 0, utf16Offset: 3))
         #expect(vocab.first?.word == "resignation")
+        #expect(vocab.first?.book?.id == sourceBook.id)
+        #expect(vocab.first?.sourcePosition == ReadingPosition(chapterIndex: 0, utf16Offset: 5))
         #expect(memories.first?.tags == ["空白", "深读"])
 
         let updated = try store.importPackage(package)
@@ -184,7 +189,9 @@ struct ReaderNotesBackupTests {
         vocab.dueAt = fixedDate(6)
         vocab.createdAt = fixedDate(7)
         vocab.lastReviewedAt = fixedDate(8)
+        vocab.setSourcePosition(ReadingPosition(chapterIndex: 0, utf16Offset: 5))
         context.insert(vocab)
+        vocab.book = book
 
         let bookmark = Bookmark(chapterIndex: 0, utf16Offset: 4, snippet: "一章正文")
         bookmark.id = UUID(uuidString: "00000000-0000-0000-0000-000000000501")!

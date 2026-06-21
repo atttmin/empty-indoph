@@ -24,7 +24,9 @@ struct VocabStore {
         partOfSpeech: String? = nil,
         note: String? = nil,
         sentence: String? = nil,
-        source: String? = nil
+        source: String? = nil,
+        book: Book? = nil,
+        sourcePosition: ReadingPosition? = nil
     ) throws -> VocabEntry {
         if let existing = try entries(for: word).first {
             if !meaning.isEmpty { existing.meaning = meaning }
@@ -33,6 +35,8 @@ struct VocabStore {
             if let note { existing.note = note }
             if let sentence { existing.sentence = sentence }
             if let source { existing.source = source }
+            if let book { existing.book = book }
+            if let sourcePosition { existing.setSourcePosition(sourcePosition) }
             try modelContext.save()
             return existing
         }
@@ -46,6 +50,8 @@ struct VocabStore {
             sentence: sentence,
             source: source
         )
+        entry.book = book
+        entry.setSourcePosition(sourcePosition)
         modelContext.insert(entry)
         try modelContext.save()
         return entry
@@ -55,7 +61,9 @@ struct VocabStore {
     func lookupWithAI(
         word: String,
         sentence: String,
-        source: String
+        source: String,
+        book: Book? = nil,
+        sourcePosition: ReadingPosition? = nil
     ) async throws -> VocabEntry {
         let resolution = AIProviderRegistry.load().resolveUsableService(feature: .vocab)
         let service = resolution.service
@@ -83,7 +91,9 @@ struct VocabStore {
             partOfSpeech: parsed.partOfSpeech,
             note: parsed.note,
             sentence: sentence,
-            source: source
+            source: source,
+            book: book,
+            sourcePosition: sourcePosition
         )
     }
 

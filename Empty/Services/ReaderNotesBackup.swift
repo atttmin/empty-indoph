@@ -101,6 +101,7 @@ nonisolated struct ReaderNotesBackupPackage: Codable, Equatable, Sendable {
 
     nonisolated struct VocabEntryRecord: Codable, Equatable, Identifiable, Sendable {
         var id: UUID
+        var bookID: UUID?
         var word: String
         var phonetic: String?
         var partOfSpeech: String?
@@ -108,6 +109,8 @@ nonisolated struct ReaderNotesBackupPackage: Codable, Equatable, Sendable {
         var note: String?
         var sentence: String?
         var source: String?
+        var sourceChapterIndex: Int?
+        var sourceUTF16Offset: Int?
         var stage: Int
         var dueAt: Date
         var createdAt: Date
@@ -383,11 +386,12 @@ struct ReaderNotesBackupStore {
         }
 
         for record in package.vocabEntries {
+            let book = record.bookID.flatMap { booksByID[$0] }
             if let entry = vocabByID[record.id] {
-                record.apply(to: entry)
+                record.apply(to: entry, book: book)
                 summary.updated.vocabEntries += 1
             } else {
-                let entry = record.makeModel()
+                let entry = record.makeModel(book: book)
                 modelContext.insert(entry)
                 vocabByID[entry.id] = entry
                 summary.inserted.vocabEntries += 1
@@ -566,6 +570,7 @@ private extension ReaderNotesBackupPackage.ReadingSessionRecord {
 private extension ReaderNotesBackupPackage.VocabEntryRecord {
     init(_ entry: VocabEntry) {
         id = entry.id
+        bookID = entry.book?.id
         word = entry.word
         phonetic = entry.phonetic
         partOfSpeech = entry.partOfSpeech
@@ -573,13 +578,15 @@ private extension ReaderNotesBackupPackage.VocabEntryRecord {
         note = entry.note
         sentence = entry.sentence
         source = entry.source
+        sourceChapterIndex = entry.sourceChapterIndex
+        sourceUTF16Offset = entry.sourceUTF16Offset
         stage = entry.stage
         dueAt = entry.dueAt
         createdAt = entry.createdAt
         lastReviewedAt = entry.lastReviewedAt
     }
 
-    func makeModel() -> VocabEntry {
+    func makeModel(book: Book?) -> VocabEntry {
         let entry = VocabEntry(
             word: word,
             meaning: meaning,
@@ -589,11 +596,11 @@ private extension ReaderNotesBackupPackage.VocabEntryRecord {
             sentence: sentence,
             source: source
         )
-        apply(to: entry)
+        apply(to: entry, book: book)
         return entry
     }
 
-    func apply(to entry: VocabEntry) {
+    func apply(to entry: VocabEntry, book: Book?) {
         entry.id = id
         entry.word = word
         entry.phonetic = phonetic
@@ -602,6 +609,9 @@ private extension ReaderNotesBackupPackage.VocabEntryRecord {
         entry.note = note
         entry.sentence = sentence
         entry.source = source
+        entry.sourceChapterIndex = sourceChapterIndex
+        entry.sourceUTF16Offset = sourceUTF16Offset
+        entry.book = book
         entry.stage = stage
         entry.dueAt = dueAt
         entry.createdAt = createdAt

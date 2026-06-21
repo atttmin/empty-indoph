@@ -575,7 +575,9 @@ struct ReadingToolbox {
             let entry = try await VocabStore(modelContext: modelContext).lookupWithAI(
                 word: word,
                 sentence: sentence.isEmpty ? word : sentence,
-                source: book.title
+                source: book.title,
+                book: book,
+                sourcePosition: position
             )
             return "已加入生词本:\(entry.word) — \(entry.meaning)"
         case let .saveFlashcards(cards):
