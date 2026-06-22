@@ -241,8 +241,39 @@ final class EPUBParser {
 
         for (spineIndex, spineItem) in opfParser.spine.enumerated() {
             guard let href = opfParser.manifest[spineItem] else { continue }
+
+            // 1. If NCX has a title, use it without reading the chapter file.
+            if let ncxTitle = ncxTitlesByOrder[spineIndex], !ncxTitle.isEmpty {
+                chapters.append(EPUBChapter(
+                    title: ncxTitle,
+                    href: href,
+                    content: ""
+                ))
+                continue
+            }
+
             let chapterURL = opfDir.appendingPathComponent(href)
 
+            // 2. When loadContent is false (quick open), read only if needed for title.
+            //    Use filename as fallback so we don't block on file I/O.
+            if !loadContent {
+                let fallback = href.components(separatedBy: "/").last?
+                    .replacingOccurrences(of: ".xhtml", with: "")
+                    .replacingOccurrences(of: ".html", with: "")
+                    .replacingOccurrences(of: "_", with: " ")
+                    .replacingOccurrences(of: "-", with: " ")
+                    .trimmingCharacters(in: .whitespaces)
+                    .capitalized
+                    .nilIfEmpty ?? "Chapter \(spineIndex + 1)"
+                chapters.append(EPUBChapter(
+                    title: fallback,
+                    href: href,
+                    content: ""
+                ))
+                continue
+            }
+
+            // 3. loadContent is true (import path) — read the full file.
             let content: String
             do {
                 content = try String(contentsOf: chapterURL, encoding: .utf8)
@@ -252,14 +283,8 @@ final class EPUBParser {
                 content = detected
             }
 
-            // Prefer NCX title (EPUB 2) over nav title (EPUB 3) over extracted.
-            let title: String
-            if let ncxTitle = ncxTitlesByOrder[spineIndex], !ncxTitle.isEmpty {
-                title = ncxTitle
-            } else if let extracted = extractTitle(from: content) {
-                title = extracted
-            } else {
-                title = href.components(separatedBy: "/").last?
+            let title = extractTitle(from: content)
+                ?? href.components(separatedBy: "/").last?
                     .replacingOccurrences(of: ".xhtml", with: "")
                     .replacingOccurrences(of: ".html", with: "")
                     .replacingOccurrences(of: "_", with: " ")
@@ -267,12 +292,11 @@ final class EPUBParser {
                     .trimmingCharacters(in: .whitespaces)
                     .capitalized
                     .nilIfEmpty ?? "Chapter \(spineIndex + 1)"
-            }
 
             chapters.append(EPUBChapter(
                 title: title,
                 href: href,
-                content: loadContent ? content : ""
+                content: content
             ))
         }
 
