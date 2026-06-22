@@ -22,16 +22,6 @@ final class EPUBParser {
         }
     }
 
-    /// Unzips (first time only) and parses an imported EPUB.
-    ///
-    /// - Parameters:
-    ///   - fileURL: the stored `.epub` file (see `BookFileStore`).
-    ///   - unzipDirectory: working directory for the extracted archive;
-    ///     created on first parse, reused afterwards.
-    ///   - loadContent: when `true`, every spine item's XHTML is read into
-    ///     memory (used during import to extract plain text for the AI layer).
-    ///     When `false` (the default for opening a book), only metadata and
-    ///     the spine list are loaded; chapter XHTML is pulled on demand.
     func parseBook(
         at fileURL: URL,
         unzipDirectory: URL,
@@ -59,7 +49,7 @@ final class EPUBParser {
         )
     }
 
-    // MARK: - Private
+    // MARK: - ZIP Extraction
 
     private func unzipEPUB(at source: URL, to destination: URL) throws {
         let fileManager = FileManager.default
@@ -67,9 +57,6 @@ final class EPUBParser {
             try fileManager.removeItem(at: destination)
         }
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-
-        // Use Process for unzip on macOS/iOS simulator, or Archive framework
-        // For iOS, we'll use a simple ZIP extraction approach
         try extractZIP(at: source, to: destination)
     }
 
@@ -79,15 +66,12 @@ final class EPUBParser {
     }
 
     private func extractZIPData(_ data: Data, to destination: URL) throws {
-        // Minimal ZIP parser
-        // ZIP files have entries with local file headers starting with PK\x03\x04
         let fileManager = FileManager.default
         var offset = 0
         let bytes = [UInt8](data)
         let count = bytes.count
 
         while offset + 30 <= count {
-            // Check for local file header signature: 0x04034b50
             guard bytes[offset] == 0x50,
                   bytes[offset + 1] == 0x4B,
                   bytes[offset + 2] == 0x03,
@@ -106,7 +90,13 @@ final class EPUBParser {
             guard nameEnd <= count else { break }
 
             let nameData = Data(bytes[nameStart..<nameEnd])
-            guard let name = String(data: nameData, encoding: .utf8) else {
+            // Try UTF-8 first, fall back to CP437 (common for older ZIPs).
+            let name: String
+            if let utf8Name = String(data: nameData, encoding: .utf8) {
+                name = utf8Name
+            } else if let cp437Name = String(data: nameData, encoding: .ascii) {
+                name = cp437Name
+            } else {
                 offset = nameEnd + extraLength + compressedSize
                 continue
             }
@@ -116,37 +106,33 @@ final class EPUBParser {
             guard dataEnd <= count else { break }
 
             let filePath = destination.appendingPathComponent(name)
-            // Zip-slip guard: never write outside the destination directory.
             guard filePath.standardizedFileURL.path.hasPrefix(destination.standardizedFileURL.path + "/") else {
                 offset = dataEnd
                 continue
             }
 
             if name.hasSuffix("/") {
-                try fileManager.createDirectory(at: filePath, withIntermediateDirectories: true)
+                try? fileManager.createDirectory(at: filePath, withIntermediateDirectories: true)
             } else {
                 let parentDir = filePath.deletingLastPathComponent()
-                try fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true)
+                try? fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true)
 
                 let fileData: Data
                 if compressionMethod == 0 {
-                    // Stored (no compression)
                     fileData = Data(bytes[dataStart..<dataEnd])
                 } else if compressionMethod == 8 {
-                    // Deflate
                     let compressedData = Data(bytes[dataStart..<dataEnd])
-                    if let decompressed = decompress(compressedData, expectedSize: uncompressedSize) {
-                        fileData = decompressed
-                    } else {
+                    guard let decompressed = decompress(compressedData, expectedSize: uncompressedSize) else {
                         offset = dataEnd
                         continue
                     }
+                    fileData = decompressed
                 } else {
                     offset = dataEnd
                     continue
                 }
 
-                try fileData.write(to: filePath)
+                try? fileData.write(to: filePath)
             }
 
             offset = dataEnd
@@ -154,7 +140,6 @@ final class EPUBParser {
     }
 
     private func decompress(_ data: Data, expectedSize: Int) -> Data? {
-        // Use Compression framework for deflate
         guard !data.isEmpty else { return Data() }
         let bufferSize = max(expectedSize, 1024)
         let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
@@ -173,6 +158,8 @@ final class EPUBParser {
         guard decompressedSize > 0 else { return nil }
         return Data(bytes: destinationBuffer, count: decompressedSize)
     }
+
+    // MARK: - OPF & Metadata
 
     private func parseOPFURL(from bookDir: URL) throws -> URL {
         let containerURL = bookDir.appendingPathComponent("META-INF/container.xml")
@@ -211,7 +198,6 @@ final class EPUBParser {
             return try? Data(contentsOf: URL(fileURLWithPath: coverPath))
         }
 
-        // Try common cover image locations
         let commonPaths = [
             "cover.jpg", "cover.jpeg", "cover.png",
             "images/cover.jpg", "images/cover.jpeg", "images/cover.png",
@@ -229,6 +215,8 @@ final class EPUBParser {
         return nil
     }
 
+    // MARK: - Chapter Parsing
+
     private func parseChapters(
         opfURL: URL,
         loadContent: Bool
@@ -244,15 +232,21 @@ final class EPUBParser {
             guard let href = opfParser.manifest[spineItem] else { continue }
             let chapterURL = opfDir.appendingPathComponent(href)
 
-            // Always need the file on disk to extract a title. For opening a
-            // large book we still read it, but we drop the content immediately
-            // unless `loadContent` is true (import path).
-            guard let content = try? String(contentsOf: chapterURL, encoding: .utf8) else { continue }
+            let content: String
+            do {
+                content = try String(contentsOf: chapterURL, encoding: .utf8)
+            } catch {
+                guard let raw = try? Data(contentsOf: chapterURL),
+                      let detected = Self.detectEncoding(raw) else { continue }
+                content = detected
+            }
 
-            // Extract title from content or use filename
-            let title = extractTitle(from: content) ?? href.components(separatedBy: "/").last?.replacingOccurrences(of: ".xhtml", with: "").replacingOccurrences(of: ".html", with: "") ?? "Chapter"
+            let title = extractTitle(from: content)
+                ?? href.components(separatedBy: "/").last?
+                    .replacingOccurrences(of: ".xhtml", with: "")
+                    .replacingOccurrences(of: ".html", with: "")
+                ?? "Chapter"
 
-            // Find the TOC title if available
             let tocTitle = opfParser.tocTitles[spineItem] ?? title
 
             chapters.append(EPUBChapter(
@@ -266,10 +260,11 @@ final class EPUBParser {
     }
 
     private func extractTitle(from htmlContent: String) -> String? {
-        // Simple regex to extract <title> or first <h1>/<h2>
         if let range = htmlContent.range(of: "<title>(.*?)</title>", options: .regularExpression) {
             let match = htmlContent[range]
-            let cleaned = match.replacingOccurrences(of: "<title>", with: "").replacingOccurrences(of: "</title>", with: "")
+            let cleaned = match
+                .replacingOccurrences(of: "<title>", with: "")
+                .replacingOccurrences(of: "</title>", with: "")
             if !cleaned.isEmpty && cleaned != "Untitled" {
                 return cleaned
             }
@@ -277,7 +272,57 @@ final class EPUBParser {
 
         if let range = htmlContent.range(of: "<h1[^>]*>(.*?)</h1>", options: .regularExpression) {
             let match = htmlContent[range]
-            return match.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+            return match
+                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return nil
+    }
+
+    /// Detect HTML/XHTML encoding from BOM, XML declaration, or meta charset.
+    private static func detectEncoding(_ data: Data) -> String? {
+        let raw = [UInt8](data)
+        let prefix = String(decoding: data.prefix(2048), as: UTF8.self)
+
+        // 1. BOM detection
+        if raw.starts(with: [0xFF, 0xFE]) {
+            return String(data: data.advanced(by: 2), encoding: .utf16LittleEndian)
+        }
+        if raw.starts(with: [0xFE, 0xFF]) {
+            return String(data: data.advanced(by: 2), encoding: .utf16BigEndian)
+        }
+
+        // 2. XML declaration: <?xml encoding="..."?>
+        if let xmlEnd = prefix.range(of: "?>") {
+            let xmlDecl = prefix[prefix.startIndex..<xmlEnd.lowerBound]
+            if let encStart = xmlDecl.range(of: "encoding"),
+               let qStart = xmlDecl[encStart.upperBound...].firstIndex(of: "\""),
+               let qEnd = xmlDecl[qStart...].dropFirst().firstIndex(of: "\"") {
+                let encName = xmlDecl[xmlDecl.index(after: qStart)..<qEnd].lowercased()
+                let cfEnc = CFStringConvertIANACharsetNameToEncoding(encName as CFString)
+                if cfEnc != kCFStringEncodingInvalidId {
+                    let nsEnc = CFStringConvertEncodingToNSStringEncoding(cfEnc)
+                    return String(data: data, encoding: String.Encoding(rawValue: nsEnc))
+                }
+            }
+        }
+
+        // 3. BOM-less UTF-16 detection (no BOM, but valid UTF-16BE/LE)
+        if raw.count >= 2 {
+            if raw[0] == 0x00 && raw[1] != 0x00 {
+                return String(data: data, encoding: .utf16BigEndian)
+            }
+            if raw[0] != 0x00 && raw[1] == 0x00 {
+                return String(data: data, encoding: .utf16LittleEndian)
+            }
+        }
+
+        // 4. Final fallback: common legacy encodings
+        for enc in [String.Encoding.windowsCP1252, .isoLatin1, .ascii] {
+            if let s = String(data: data, encoding: enc) {
+                return s
+            }
         }
 
         return nil
@@ -307,9 +352,9 @@ private class SimpleXMLParser: NSObject, XMLParserDelegate {
 /// Parses the OPF (Open Packaging Format) file for metadata, manifest, and spine
 private class OPFParser: NSObject, XMLParserDelegate {
     var metadata = EPUBMetadata()
-    var manifest: [String: String] = [:] // id -> href
-    var manifestMediaTypes: [String: String] = [:] // id -> media-type
-    var spine: [String] = [] // ordered list of manifest item IDs
+    var manifest: [String: String] = [:]
+    var manifestMediaTypes: [String: String] = [:]
+    var spine: [String] = []
     var coverImageID: String?
     var tocTitles: [String: String] = [:]
 

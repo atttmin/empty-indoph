@@ -1743,17 +1743,19 @@ struct ReadingView: View {
                 let fileStore = try BookFileStore.makeDefault()
                 let fileURL = fileStore.url(forRelativePath: relativePath)
 
-                switch book.format {
-                case .epub:
-                    // Open the book without pulling every spine item into
-                    // memory: parse metadata and the chapter list, then load
-                    // only the current chapter's XHTML before leaving the
-                    // loading screen.
-                    var parsed = try EPUBParser().parseBook(
+                // Parse on background thread so the loading spinner stays responsive.
+                let bookID = book.id
+                let parsedBook = try await Task.detached(priority: .userInitiated) {
+                    try EPUBParser().parseBook(
                         at: fileURL,
-                        unzipDirectory: fileStore.unzipDirectory(forBookID: book.id),
+                        unzipDirectory: fileStore.unzipDirectory(forBookID: bookID),
                         loadContent: false
                     )
+                }.value
+
+                switch book.format {
+                case .epub:
+                    var parsed = parsedBook
                     guard !parsed.chapters.isEmpty else {
                         throw EPUBParser.ParseError.parsingFailed("No readable chapters found.")
                     }
