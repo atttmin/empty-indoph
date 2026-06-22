@@ -228,7 +228,18 @@ final class EPUBParser {
         let opfDir = opfURL.deletingLastPathComponent()
         var chapters: [EPUBChapter] = []
 
-        for spineItem in opfParser.spine {
+        // Try to load NCX TOC titles if available (EPUB 2).
+        var ncxTitlesByOrder: [Int: String] = [:]
+        if let ncxID = opfParser.ncxID, let ncxHref = opfParser.manifest[ncxID] {
+            let ncxURL = opfDir.appendingPathComponent(ncxHref)
+            if let ncxData = try? Data(contentsOf: ncxURL) {
+                let ncxParser = NCXParser()
+                ncxParser.parse(data: ncxData)
+                ncxTitlesByOrder = ncxParser.titlesByOrder
+            }
+        }
+
+        for (spineIndex, spineItem) in opfParser.spine.enumerated() {
             guard let href = opfParser.manifest[spineItem] else { continue }
             let chapterURL = opfDir.appendingPathComponent(href)
 
@@ -241,16 +252,25 @@ final class EPUBParser {
                 content = detected
             }
 
-            let title = extractTitle(from: content)
-                ?? href.components(separatedBy: "/").last?
+            // Prefer NCX title (EPUB 2) over nav title (EPUB 3) over extracted.
+            let title: String
+            if let ncxTitle = ncxTitlesByOrder[spineIndex], !ncxTitle.isEmpty {
+                title = ncxTitle
+            } else if let extracted = extractTitle(from: content) {
+                title = extracted
+            } else {
+                title = href.components(separatedBy: "/").last?
                     .replacingOccurrences(of: ".xhtml", with: "")
                     .replacingOccurrences(of: ".html", with: "")
-                ?? "Chapter"
-
-            let tocTitle = opfParser.tocTitles[spineItem] ?? title
+                    .replacingOccurrences(of: "_", with: " ")
+                    .replacingOccurrences(of: "-", with: " ")
+                    .trimmingCharacters(in: .whitespaces)
+                    .capitalized
+                    .nilIfEmpty ?? "Chapter \(spineIndex + 1)"
+            }
 
             chapters.append(EPUBChapter(
-                title: tocTitle,
+                title: title,
                 href: href,
                 content: loadContent ? content : ""
             ))
@@ -260,21 +280,36 @@ final class EPUBParser {
     }
 
     private func extractTitle(from htmlContent: String) -> String? {
+        // Try <title> tag content.
         if let range = htmlContent.range(of: "<title>(.*?)</title>", options: .regularExpression) {
             let match = htmlContent[range]
-            let cleaned = match
+            var cleaned = match
                 .replacingOccurrences(of: "<title>", with: "")
                 .replacingOccurrences(of: "</title>", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Strip common boilerplate: "Book Title: Chapter" or "Book Title | Chapter"
+            if let sep = cleaned.firstIndex(of: ":") {
+                cleaned = String(cleaned[cleaned.index(after: sep)...]).trimmingCharacters(in: .whitespaces)
+            } else if let sep = cleaned.firstIndex(of: "|") ?? cleaned.firstIndex(of: "－") ?? cleaned.firstIndex(of: "–") {
+                cleaned = String(cleaned[cleaned.index(after: sep)...]).trimmingCharacters(in: .whitespaces)
+            }
+
             if !cleaned.isEmpty && cleaned != "Untitled" {
                 return cleaned
             }
         }
 
-        if let range = htmlContent.range(of: "<h1[^>]*>(.*?)</h1>", options: .regularExpression) {
-            let match = htmlContent[range]
-            return match
-                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Try heading tags h1-h3.
+        for tag in ["h1", "h2", "h3"] {
+            let pattern = "<" + tag + "[^>]*>(.*?)</" + tag + ">"
+            if let range = htmlContent.range(of: pattern, options: .regularExpression) {
+                let match = htmlContent[range]
+                let cleaned = match
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleaned.isEmpty { return cleaned }
+            }
         }
 
         return nil
@@ -304,7 +339,7 @@ final class EPUBParser {
     }
 
     /// Detect HTML/XHTML encoding from BOM, XML declaration, or meta charset.
-    private static func detectEncoding(_ data: Data) -> String? {
+    fileprivate static func detectEncoding(_ data: Data) -> String? {
         let raw = [UInt8](data)
         let prefix = String(decoding: data.prefix(2048), as: UTF8.self)
 
@@ -379,6 +414,8 @@ private class OPFParser: NSObject, XMLParserDelegate {
     var coverImageID: String?
     var tocTitles: [String: String] = [:]
 
+    var ncxID: String?
+
     private var currentElement = ""
     private var currentText = ""
     private var inMetadata = false
@@ -413,6 +450,8 @@ private class OPFParser: NSObject, XMLParserDelegate {
             if attributeDict["name"] == "cover" {
                 coverImageID = attributeDict["content"]
             }
+        case "spine":
+            ncxID = attributeDict["toc"]
         default:
             break
         }
@@ -450,5 +489,82 @@ private class OPFParser: NSObject, XMLParserDelegate {
         default:
             break
         }
+    }
+}
+
+/// Parses NCX (Navigation Control for XML) files for chapter titles (EPUB 2).
+private class NCXParser: NSObject, XMLParserDelegate {
+    /// spine order index -> chapter title
+    var titlesByOrder: [Int: String] = [:]
+    private var playOrder = 0
+    private var inNavLabel = false
+    private var inNavText = ""
+    private var depth = 0
+
+    func parse(data: Data) {
+        // Try UTF-8 first, fall back to detected encoding.
+        var xmlData = data
+        if String(data: data, encoding: .utf8) == nil,
+           let detected = EPUBParser.detectEncoding(data) {
+            xmlData = detected.data(using: .utf8) ?? data
+        }
+        let parser = XMLParser(data: xmlData)
+        parser.delegate = self
+        parser.parse()
+    }
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
+                qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
+        let localName = elementName.components(separatedBy: ":").last ?? elementName
+        switch localName {
+        case "navPoint":
+            if let orderStr = attributeDict["playOrder"], let order = Int(orderStr) {
+                playOrder = order
+            }
+            depth += 1
+            inNavLabel = false
+            inNavText = ""
+        case "navLabel":
+            inNavLabel = true
+            inNavText = ""
+        case "text":
+            if inNavLabel { inNavText = "" }
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if inNavLabel {
+            inNavText += string
+        }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
+                qualifiedName qName: String?) {
+        let localName = elementName.components(separatedBy: ":").last ?? elementName
+        switch localName {
+        case "text":
+            if inNavLabel {
+                let title = inNavText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !title.isEmpty {
+                    // Use playOrder as the key (1-based in NCX).
+                    titlesByOrder[playOrder - 1] = title
+                }
+            }
+        case "navLabel":
+            inNavLabel = false
+        case "navPoint":
+            depth -= 1
+        default:
+            break
+        }
+    }
+}
+
+private extension String {
+    /// Returns nil when the string is empty or only whitespace.
+    var nilIfEmpty: String? {
+        trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
     }
 }
