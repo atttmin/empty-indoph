@@ -147,6 +147,9 @@ struct IOSLibraryScreen: View {
             .padding(.top, 8)
             .padding(.bottom, 120)
         }
+        .onAppear {
+            ImportLogger.write("IOSLibraryScreen appeared at " + Date().ISO8601Format())
+        }
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: Library.importableContentTypes,
