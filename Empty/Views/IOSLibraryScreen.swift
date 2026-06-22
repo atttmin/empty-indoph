@@ -154,7 +154,16 @@ struct IOSLibraryScreen: View {
             isPresented: $isImporterPresented,
             allowedContentTypes: Library.importableContentTypes,
             allowsMultipleSelection: true,
-            onCompletion: handleImport
+            onCompletion: { result in
+                ImportLogger.write("handleImport inline called")
+                switch result {
+                case .success(let urls):
+                    ImportLogger.write("selected " + String(urls.count) + " files")
+                case .failure(let error):
+                    ImportLogger.write("fileImporter error: " + error.localizedDescription)
+                }
+                self.handleImport(result)
+            }
         )
         .sheet(isPresented: $isDiagnosticsPresented) {
             AIDiagnosticsView()
