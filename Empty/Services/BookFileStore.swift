@@ -4,6 +4,14 @@
 //
 
 import Foundation
+import OSLog
+
+private let storeLog = OSLog(subsystem: "davirian.Empty", category: "filestore")
+
+private func logStore(_ msg: String) {
+    os_log(.info, log: storeLog, "%{public}@", msg)
+    ImportLogger.write(msg)
+}
 
 /// Owns the on-disk copies of imported book files.
 ///
@@ -59,17 +67,46 @@ nonisolated struct BookFileStore {
             if isScoped { sourceURL.stopAccessingSecurityScopedResource() }
         }
 
+        logStore("importFile: isScoped=\(isScoped), source=\(sourceURL.path)")
+
+        let fileManager = FileManager.default
+
+        let appSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false).path) ?? "N/A"
+        logStore("sandbox appSupport: \(appSupport)")
+
         let relativePath = "\(bookID.uuidString)/source.\(sourceURL.pathExtension.lowercased())"
         let destination = url(forRelativePath: relativePath)
-        let fileManager = FileManager.default
-        try fileManager.createDirectory(
-            at: destination.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+        logStore("destination: \(destination.path)")
+
+        let dir = destination.deletingLastPathComponent()
+        logStore("creating dir: \(dir.path)")
+
+        do {
+            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+            logStore("directory OK")
+        } catch {
+            logStore("ERROR createDirectory: \(error.localizedDescription)")
+            throw error
         }
-        try fileManager.copyItem(at: sourceURL, to: destination)
+
+        if fileManager.fileExists(atPath: destination.path) {
+            do {
+                try fileManager.removeItem(at: destination)
+                logStore("removed existing file")
+            } catch {
+                logStore("ERROR removeItem: \(error.localizedDescription)")
+                throw error
+            }
+        }
+
+        do {
+            try fileManager.copyItem(at: sourceURL, to: destination)
+            logStore("copyItem success")
+        } catch {
+            logStore("ERROR copyItem: \(error.localizedDescription)")
+            throw error
+        }
+
         return relativePath
     }
 
