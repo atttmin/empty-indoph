@@ -730,9 +730,7 @@ struct IOSLibraryScreen: View {
                     contentTypes: Library.importableContentTypes,
                     allowsMultiple: true,
                     completion: { result in
-                        Task { @MainActor in
-                            self.handleImport(result)
-                        }
+                        self.handleImport(result)
                     }
                 )
             } label: {
@@ -780,9 +778,7 @@ struct IOSLibraryScreen: View {
                     contentTypes: Library.importableContentTypes,
                     allowsMultiple: true,
                     completion: { result in
-                        Task { @MainActor in
-                            self.handleImport(result)
-                        }
+                        self.handleImport(result)
                     }
                 )
             }
