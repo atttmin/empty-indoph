@@ -280,6 +280,29 @@ final class EPUBParser {
         return nil
     }
 
+    /// Map IANA charset name to Foundation String.Encoding.
+    private static func ianaEncodingToNSStringEncoding(_ name: String) -> String.Encoding? {
+        switch name {
+        case "utf-8", "utf8": return .utf8
+        case "utf-16", "utf16": return .utf16
+        case "utf-16le", "utf16le": return .utf16LittleEndian
+        case "utf-16be", "utf16be": return .utf16BigEndian
+        case "iso-8859-1", "iso8859-1", "latin1": return .isoLatin1
+        case "iso-8859-2", "iso8859-2", "latin2": return .isoLatin2
+        case "windows-1252", "cp1252": return .windowsCP1252
+        case "shift_jis", "shift-jis", "sjis": return .shiftJIS
+        case "euc-jp", "eucjp": return .japaneseEUC
+        case "gbk", "gb2312":
+            return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+        case "big5", "big5-hkscs":
+            return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5.rawValue)))
+        case "koi8-r", "koi8r":
+            return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.KOI8_R.rawValue)))
+        case "us-ascii", "ascii": return .ascii
+        default: return nil
+        }
+    }
+
     /// Detect HTML/XHTML encoding from BOM, XML declaration, or meta charset.
     private static func detectEncoding(_ data: Data) -> String? {
         let raw = [UInt8](data)
@@ -300,10 +323,8 @@ final class EPUBParser {
                let qStart = xmlDecl[encStart.upperBound...].firstIndex(of: "\""),
                let qEnd = xmlDecl[qStart...].dropFirst().firstIndex(of: "\"") {
                 let encName = xmlDecl[xmlDecl.index(after: qStart)..<qEnd].lowercased()
-                let cfEnc = CFStringConvertIANACharsetNameToEncoding(encName as CFString)
-                if cfEnc != kCFStringEncodingInvalidId {
-                    let nsEnc = CFStringConvertEncodingToNSStringEncoding(cfEnc)
-                    return String(data: data, encoding: String.Encoding(rawValue: nsEnc))
+                if let nsEnc = Self.ianaEncodingToNSStringEncoding(encName) {
+                    return String(data: data, encoding: nsEnc)
                 }
             }
         }
