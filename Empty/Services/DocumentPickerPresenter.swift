@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 /// Presents a document picker on the key window's top-most view controller.
 /// The completion is called on the main actor.
 @MainActor
-nonisolated enum DocumentPickerPresenter {
+enum DocumentPickerPresenter {
     static func pick(
         contentTypes: [UTType],
         allowsMultiple: Bool,
