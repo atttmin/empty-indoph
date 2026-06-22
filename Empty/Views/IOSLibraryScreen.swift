@@ -27,7 +27,6 @@ struct IOSLibraryScreen: View {
     @Query private var vocabEntries: [VocabEntry]
     @Query private var studyCards: [StudyCardEntry]
 
-    @State private var isImporterPresented = false
     @State private var isDiagnosticsPresented = false
     @State private var isBackupPresented = false
     @State private var isSearching = false
@@ -146,9 +145,6 @@ struct IOSLibraryScreen: View {
             .padding(.horizontal, 22)
             .padding(.top, 8)
             .padding(.bottom, 120)
-        }
-        .onAppear {
-            ImportLogger.write("IOSLibraryScreen appeared at " + Date().ISO8601Format())
         }
 
         .sheet(isPresented: $isDiagnosticsPresented) {
@@ -730,12 +726,10 @@ struct IOSLibraryScreen: View {
             }
 
             Button {
-                ImportLogger.write("import button tapped (shelf)")
                 DocumentPickerPresenter.pick(
                     contentTypes: Library.importableContentTypes,
                     allowsMultiple: true,
                     completion: { result in
-                        ImportLogger.write("DocumentPickerPresenter callback")
                         Task { @MainActor in
                             self.handleImport(result)
                         }
@@ -782,12 +776,10 @@ struct IOSLibraryScreen: View {
                 .foregroundStyle(palette.ink3)
                 .multilineTextAlignment(.center)
             Button("导入书籍") {
-                ImportLogger.write("import button tapped (empty state)")
                 DocumentPickerPresenter.pick(
                     contentTypes: Library.importableContentTypes,
                     allowsMultiple: true,
                     completion: { result in
-                        ImportLogger.write("DocumentPickerPresenter callback")
                         Task { @MainActor in
                             self.handleImport(result)
                         }
@@ -808,23 +800,12 @@ struct IOSLibraryScreen: View {
     // MARK: Import / delete
 
     private func handleImport(_ result: Result<[URL], Error>) {
-        ImportLogger.write("handleImport called")
-        switch result {
-        case .success(let urls):
-            ImportLogger.write("selected " + String(urls.count) + " files")
-        case .failure(let error):
-            ImportLogger.write("fileImporter error: " + error.localizedDescription)
-            errorMessage = error.localizedDescription
-            return
-        }
         do {
             let library = try Library(modelContext: modelContext)
-            ImportLogger.write("Library init OK")
             for url in try result.get() {
                 try library.importBook(from: url)
             }
         } catch {
-            ImportLogger.write("import error: " + error.localizedDescription)
             errorMessage = error.localizedDescription
         }
     }
