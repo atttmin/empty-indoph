@@ -1,23 +1,12 @@
-name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
 jobs:
   macos-test:
     name: Build and Test (macOS)
     runs-on: macos-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Show Xcode version
         run: xcodebuild -version
-
       - name: Build and run unit tests
         run: |
           set -o pipefail
@@ -32,15 +21,12 @@ jobs:
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             IPHONEOS_DEPLOYMENT_TARGET=18.0 \
             | xcpretty
-
   ios-build:
     name: Build (iOS Simulator)
     runs-on: macos-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Build for iOS Simulator
         run: |
           set -o pipefail
@@ -52,19 +38,15 @@ jobs:
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             IPHONEOS_DEPLOYMENT_TARGET=18.0 \
             | xcpretty
-
   macos-package:
     name: Build macOS .dmg
     runs-on: macos-latest
     needs: macos-test
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Show Xcode version
         run: xcodebuild -version
-
       - name: Build Release for macOS
         run: |
           set -o pipefail
@@ -78,13 +60,43 @@ jobs:
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             IPHONEOS_DEPLOYMENT_TARGET=18.0 \
             | xcpretty
-
       - name: Package .dmg
         run: ./scripts/package-mac-dmg.sh DerivedData/Build/Products/Release/Empty.app
-
       - name: Upload .dmg artifact
         uses: actions/upload-artifact@v4
         with:
           name: Empty-macOS
           path: Empty-*.dmg
           if-no-files-found: error
+  ios-archive-ipa:
+    name: Build iOS IPA (Unsigned)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Archive Unsigned
+        run: |
+          set -o pipefail
+          # 归档
+          xcodebuild archive \
+            -project Empty.xcodeproj \
+            -scheme Empty \
+            -configuration Release \
+            -archivePath build/Empty.xcarchive \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            IPHONEOS_DEPLOYMENT_TARGET=18.0 \
+            | xcpretty
+            
+          # 导出 IPA
+          mkdir -p Payload
+          cp -r build/Empty.xcarchive/Products/Applications/Empty.app Payload/
+          zip -r Empty-unsigned.ipa Payload
+          
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Empty-unsigned-ipa
+          path: Empty-unsigned.ipa
